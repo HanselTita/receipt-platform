@@ -1,8 +1,3 @@
-// This is your Prisma schema file,
-// learn more about it in the docs: https://pris.ly/d/prisma-schema
-
-// Get a free hosted Postgres database in seconds: `npx create-db`
-
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
@@ -10,4 +5,104 @@ generator client {
 
 datasource db {
   provider = "postgresql"
+}
+
+model Business {
+  id              String   @id @default(uuid())
+  businessName    String
+  businessType    String
+  defaultCurrency String
+  logo            String?
+  email           String?
+  phone           String?
+  taxEnabled      Boolean  @default(false)
+  taxRate         Decimal?
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  branches    Branch[]
+  memberships BusinessMembership[]
+}
+
+model Branch {
+  id                String   @id @default(uuid())
+  branchName        String
+  address           String?
+  city              String?
+  stateOrProvince   String?
+  country           String
+  phone             String?
+  receiptPrefix     String   @default("RCP")
+  nextReceiptNumber Int      @default(1)
+  isMainBranch      Boolean  @default(false)
+  createdAt         DateTime @default(now())
+  updatedAt         DateTime @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+
+  employeeAssignments BranchAssignment[]
+}
+
+enum BusinessRole {
+  OWNER
+  ADMIN
+  MANAGER
+  CASHIER
+}
+
+enum MembershipStatus {
+  INVITED
+  ACTIVE
+  SUSPENDED
+  REMOVED
+}
+
+model User {
+  id           String   @id @default(uuid())
+  firstName    String
+  lastName     String
+  email        String   @unique
+  phone        String?
+  passwordHash String
+  isActive     Boolean  @default(true)
+  createdAt    DateTime @default(now())
+  updatedAt    DateTime @updatedAt
+
+  memberships BusinessMembership[]
+}
+
+model BusinessMembership {
+  id        String           @id @default(uuid())
+  role      BusinessRole
+  status    MembershipStatus @default(ACTIVE)
+  joinedAt  DateTime         @default(now())
+  createdAt DateTime         @default(now())
+  updatedAt DateTime         @updatedAt
+
+  userId String
+  user   User   @relation(fields: [userId], references: [id])
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+
+  branchAssignments BranchAssignment[]
+
+  @@unique([userId, businessId])
+}
+
+model BranchAssignment {
+  id         String   @id @default(uuid())
+  isActive   Boolean  @default(true)
+  assignedAt DateTime @default(now())
+  createdAt  DateTime @default(now())
+  updatedAt  DateTime @updatedAt
+
+  membershipId String
+  membership   BusinessMembership @relation(fields: [membershipId], references: [id])
+
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  @@unique([membershipId, branchId])
 }

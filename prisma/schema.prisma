@@ -1,6 +1,6 @@
 generator client {
-  provider = "prisma-client"
-  output   = "../generated/prisma"
+  provider     = "prisma-client"
+  output       = "../generated/prisma"
   // Force CommonJS client output so the built files run under Node CJS
   moduleFormat = "cjs"
 }
@@ -22,8 +22,9 @@ model Business {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  branches    Branch[]
-  memberships BusinessMembership[]
+  branches     Branch[]
+  memberships  BusinessMembership[]
+  authSessions AuthSession[]
 }
 
 model Branch {
@@ -71,7 +72,8 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships BusinessMembership[]
+  memberships  BusinessMembership[]
+  authSessions AuthSession[]
 }
 
 model BusinessMembership {
@@ -107,4 +109,21 @@ model BranchAssignment {
   branch   Branch @relation(fields: [branchId], references: [id])
 
   @@unique([membershipId, branchId])
+}
+
+model AuthSession {
+  id               String    @id @default(uuid())
+  refreshTokenHash String
+  expiresAt        DateTime
+  revokedAt        DateTime?
+  createdAt        DateTime  @default(now())
+  updatedAt        DateTime  @updatedAt
+
+  userId     String
+  user       User      @relation(fields: [userId], references: [id], onDelete: Cascade)
+  business   Business? @relation(fields: [businessId], references: [id])
+  businessId String?
+
+  @@index([userId])
+  @@index([expiresAt])
 }

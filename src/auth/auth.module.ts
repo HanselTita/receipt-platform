@@ -7,10 +7,12 @@ import { AuthController } from './auth.controller';
 import { AuthService } from './auth.service';
 
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
+import { AuthSessionsModule } from '../auth-sessions/auth-sessions.module';
 
 @Module({
   imports: [
     UsersModule,
+    AuthSessionsModule,
     JwtModule.registerAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => {

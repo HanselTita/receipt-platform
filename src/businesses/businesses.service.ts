@@ -27,7 +27,18 @@ export class BusinessesService {
         },
       });
 
-      await transaction.businessMembership.create({
+      const mainBranch = await transaction.branch.create({
+        data: {
+          branchName: 'Main Branch',
+          country: createBusinessDto.country,
+          receiptPrefix: 'RCP',
+          nextReceiptNumber: 1,
+          isMainBranch: true,
+          businessId: business.id,
+        },
+      });
+
+      const ownerMembership = await transaction.businessMembership.create({
         data: {
           userId,
           businessId: business.id,
@@ -36,9 +47,23 @@ export class BusinessesService {
         },
       });
 
+      await transaction.branchAssignment.create({
+        data: {
+          membershipId: ownerMembership.id,
+          branchId: mainBranch.id,
+          isActive: true,
+        },
+      });
+
       return {
         message: 'Business created successfully.',
         business,
+        mainBranch,
+        membership: {
+          id: ownerMembership.id,
+          role: ownerMembership.role,
+          status: ownerMembership.status,
+        },
       };
     });
   }

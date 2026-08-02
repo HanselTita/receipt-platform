@@ -29,18 +29,19 @@ export class CreateBusinessDto {
   @Length(3, 3)
   defaultCurrency!: string;
 
+  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
+  @IsString()
+  @MaxLength(100)
+  country!: string;
+
   @IsOptional()
   @IsBoolean()
   taxEnabled?: boolean;
 
   @ValidateIf((dto: CreateBusinessDto) => dto.taxEnabled === true)
   @IsNumber(
-    {
-      maxDecimalPlaces: 4,
-    },
-    {
-      message: 'taxRate must be a valid number.',
-    },
+    { maxDecimalPlaces: 4 },
+    { message: 'taxRate must be a valid number.' },
   )
   @Min(0)
   @Max(100)

@@ -67,4 +67,53 @@ export class BusinessesService {
       };
     });
   }
+
+  async findAllForUser(userId: string) {
+    const memberships = await this.prisma.businessMembership.findMany({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+      orderBy: {
+        createdAt: 'asc',
+      },
+      include: {
+        business: {
+          include: {
+            branches: {
+              orderBy: [
+                {
+                  isMainBranch: 'desc',
+                },
+                {
+                  createdAt: 'asc',
+                },
+              ],
+            },
+          },
+        },
+        branchAssignments: {
+          where: {
+            isActive: true,
+          },
+          include: {
+            branch: true,
+          },
+        },
+      },
+    });
+
+    return {
+      businesses: memberships.map((membership) => ({
+        membershipId: membership.id,
+        role: membership.role,
+        status: membership.status,
+        joinedAt: membership.joinedAt,
+        business: membership.business,
+        assignedBranches: membership.branchAssignments.map(
+          (assignment) => assignment.branch,
+        ),
+      })),
+    };
+  }
 }

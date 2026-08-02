@@ -1,5 +1,6 @@
 import {
   Body,
+  Get,
   Controller,
   HttpCode,
   HttpStatus,
@@ -25,5 +26,11 @@ export class BusinessesController {
     @Body() createBusinessDto: CreateBusinessDto,
   ) {
     return this.businessesService.create(user.sub, createBusinessDto);
+  }
+
+  @Get()
+  @UseGuards(JwtAuthGuard)
+  findAll(@CurrentUser() user: AccessTokenPayload) {
+    return this.businessesService.findAllForUser(user.sub);
   }
 }

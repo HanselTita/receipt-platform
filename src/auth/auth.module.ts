@@ -42,5 +42,6 @@ import { AuthSessionsModule } from '../auth-sessions/auth-sessions.module';
   ],
   controllers: [AuthController],
   providers: [AuthService, JwtAuthGuard],
+  exports: [JwtModule, JwtAuthGuard],
 })
 export class AuthModule {}

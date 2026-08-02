@@ -1,6 +1,8 @@
 generator client {
   provider = "prisma-client"
   output   = "../generated/prisma"
+  // Force CommonJS client output so the built files run under Node CJS
+  moduleFormat = "cjs"
 }
 
 datasource db {

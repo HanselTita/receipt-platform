@@ -3,28 +3,32 @@ import {
   IsOptional,
   IsPositive,
   IsString,
+  Max,
+  MaxLength,
   Min,
 } from 'class-validator';
 
 export class ReceiptItemDto {
   @IsString()
+  @MaxLength(200)
   description!: string;
 
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 })
   @IsPositive()
   quantity!: number;
 
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
   unitPrice!: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
   discountAmount?: number;
 
   @IsOptional()
-  @IsNumber()
+  @IsNumber({ maxDecimalPlaces: 4 })
   @Min(0)
+  @Max(100)
   taxRate?: number;
 }

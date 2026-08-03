@@ -24,6 +24,7 @@ model Business {
 
   branches    Branch[]
   memberships BusinessMembership[]
+  receipts    Receipt[]
 }
 
 model Branch {
@@ -44,6 +45,7 @@ model Branch {
   business   Business @relation(fields: [businessId], references: [id])
 
   employeeAssignments BranchAssignment[]
+  receipts            Receipt[]
 }
 
 enum BusinessRole {
@@ -71,8 +73,9 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships  BusinessMembership[]
-  authSessions AuthSession[]
+  memberships     BusinessMembership[]
+  authSessions    AuthSession[]
+  createdReceipts Receipt[]
 }
 
 model BusinessMembership {
@@ -123,4 +126,76 @@ model AuthSession {
 
   @@index([userId])
   @@index([expiresAt])
+}
+
+enum ReceiptStatus {
+  ISSUED
+  VOIDED
+  CORRECTED
+}
+
+enum PaymentMethod {
+  CASH
+  CARD
+  BANK_TRANSFER
+  MOBILE_MONEY
+  OTHER
+}
+
+model Receipt {
+  id               String @id @default(uuid())
+  receiptNumber    String
+  verificationCode String @unique
+
+  customerName  String?
+  customerPhone String?
+  customerEmail String?
+
+  currency      String
+  subtotal      Decimal
+  discountTotal Decimal       @default(0)
+  taxTotal      Decimal       @default(0)
+  grandTotal    Decimal
+  paymentMethod PaymentMethod
+  notes         String?
+
+  status    ReceiptStatus @default(ISSUED)
+  issuedAt  DateTime      @default(now())
+  createdAt DateTime      @default(now())
+  updatedAt DateTime      @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id])
+
+  branchId String
+  branch   Branch @relation(fields: [branchId], references: [id])
+
+  createdByUserId String
+  createdByUser   User   @relation(fields: [createdByUserId], references: [id])
+
+  items ReceiptItem[]
+
+  @@unique([branchId, receiptNumber])
+  @@index([businessId])
+  @@index([branchId])
+  @@index([createdByUserId])
+  @@index([issuedAt])
+}
+
+model ReceiptItem {
+  id             String   @id @default(uuid())
+  description    String
+  quantity       Decimal
+  unitPrice      Decimal
+  discountAmount Decimal  @default(0)
+  taxRate        Decimal  @default(0)
+  taxAmount      Decimal  @default(0)
+  lineSubtotal   Decimal
+  lineTotal      Decimal
+  createdAt      DateTime @default(now())
+
+  receiptId String
+  receipt   Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
+
+  @@index([receiptId])
 }

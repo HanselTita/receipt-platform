@@ -1,0 +1,9 @@
+export enum AnalyticsPeriod {
+  TODAY = 'TODAY',
+  YESTERDAY = 'YESTERDAY',
+  LAST_7_DAYS = 'LAST_7_DAYS',
+  LAST_30_DAYS = 'LAST_30_DAYS',
+  THIS_MONTH = 'THIS_MONTH',
+  LAST_MONTH = 'LAST_MONTH',
+  CUSTOM = 'CUSTOM',
+}

@@ -1,4 +1,4 @@
-import { Transform, Type } from 'class-transformer';
+import { Transform } from 'class-transformer';
 import {
   IsDateString,
   IsEnum,
@@ -6,7 +6,6 @@ import {
   IsOptional,
   IsString,
   Max,
-  MaxLength,
   Min,
 } from 'class-validator';
 
@@ -14,13 +13,13 @@ import { ReceiptStatus } from '../../../generated/prisma/enums';
 
 export class QueryReceiptsDto {
   @IsOptional()
-  @Type(() => Number)
+  @Transform(({ value }) => Number(value))
   @IsInt()
   @Min(1)
   page = 1;
 
   @IsOptional()
-  @Type(() => Number)
+  @Transform(({ value }) => Number(value))
   @IsInt()
   @Min(1)
   @Max(100)
@@ -29,14 +28,7 @@ export class QueryReceiptsDto {
   @IsOptional()
   @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
   @IsString()
-  @MaxLength(50)
-  receiptNumber?: string;
-
-  @IsOptional()
-  @Transform(({ value }) => (typeof value === 'string' ? value.trim() : value))
-  @IsString()
-  @MaxLength(120)
-  customerName?: string;
+  search?: string;
 
   @IsOptional()
   @IsEnum(ReceiptStatus)

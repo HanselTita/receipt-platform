@@ -321,34 +321,47 @@ export class ReceiptsService {
       query.dateTo,
     );
 
+    const search = query.search?.trim();
+
     const where = {
       branchId: {
         in: branchIds,
       },
+
       businessId: {
         in: businessIds,
       },
-      ...(query.receiptNumber
+
+      ...(search
         ? {
-            receiptNumber: {
-              contains: query.receiptNumber,
-              mode: 'insensitive' as const,
-            },
+            OR: [
+              {
+                receiptNumber: {
+                  contains: search,
+                  mode: 'insensitive' as const,
+                },
+              },
+              {
+                customerName: {
+                  contains: search,
+                  mode: 'insensitive' as const,
+                },
+              },
+              {
+                customerPhone: {
+                  contains: search,
+                },
+              },
+            ],
           }
         : {}),
-      ...(query.customerName
-        ? {
-            customerName: {
-              contains: query.customerName,
-              mode: 'insensitive' as const,
-            },
-          }
-        : {}),
+
       ...(query.status
         ? {
             status: query.status,
           }
         : {}),
+
       ...(issuedAtFilter
         ? {
             issuedAt: issuedAtFilter,

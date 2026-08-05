@@ -7,10 +7,21 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { DashboardAnalyticsQueryDto } from './dto/dashboard-analytics-query.dto';
 import { AnalyticsPeriod } from './enums/analytics-period.enum';
+import type { Prisma } from '../../generated/prisma/client';
 
 type AnalyticsDateRange = {
   dateFrom: Date;
   dateTo: Date;
+};
+
+type DailySalesAccumulator = {
+  receiptCount: number;
+  totalSales: number;
+};
+
+type AnalyticsComparison = {
+  previousDateFrom: Date;
+  previousDateTo: Date;
 };
 
 @Injectable()
@@ -303,6 +314,7 @@ export class DashboardService {
   async getAnalytics(userId: string, query: DashboardAnalyticsQueryDto) {
     const dateRange = this.resolveAnalyticsDateRange(query);
 
+    const previousPeriod = this.resolvePreviousPeriod(dateRange);
     /*
      * Find the user's active business and active branch
      * assignments.
@@ -359,6 +371,11 @@ export class DashboardService {
           dateTo: dateRange.dateTo,
         },
 
+        previousPeriod: {
+          dateFrom: previousPeriod.previousDateFrom,
+          dateTo: previousPeriod.previousDateTo,
+        },
+
         business: membership.business,
 
         summary: {
@@ -370,10 +387,32 @@ export class DashboardService {
           voidedReceipts: 0,
           correctedReceipts: 0,
         },
+
+        comparison: {
+          previousTotalSales: '0',
+          previousReceiptCount: 0,
+          salesGrowthPercentage: 0,
+          receiptGrowthPercentage: 0,
+        },
+
+        paymentMethods: [],
+
+        dailySales: this.generateDateKeys(
+          dateRange.dateFrom,
+          dateRange.dateTo,
+        ).map((date) => ({
+          date,
+          receiptCount: 0,
+          totalSales: '0',
+        })),
+
+        highestValueReceipt: null,
+        bestSalesDay: null,
+        recentReceipts: [],
       };
     }
 
-    const baseReceiptWhere = {
+    const baseReceiptWhere: Prisma.ReceiptWhereInput = {
       businessId: membership.businessId,
 
       branchId: {
@@ -386,6 +425,18 @@ export class DashboardService {
       },
     };
 
+    const previousReceiptWhere: Prisma.ReceiptWhereInput = {
+      businessId: membership.businessId,
+
+      branchId: {
+        in: branchIds,
+      },
+
+      issuedAt: {
+        gte: previousPeriod.previousDateFrom,
+        lt: previousPeriod.previousDateTo,
+      },
+    };
     /*
      * Revenue calculations include only issued receipts.
      *
@@ -399,7 +450,15 @@ export class DashboardService {
       voidedReceipts,
       correctedReceipts,
       namedCustomers,
+      previousIssuedAggregation,
+      previousReceiptCount,
+      dailyReceiptRows,
+      highestValueReceipt,
+      recentReceipts,
     ] = await this.prisma.$transaction([
+      /*
+       * Current-period sales sum and average.
+       */
       this.prisma.receipt.aggregate({
         where: {
           ...baseReceiptWhere,
@@ -415,6 +474,9 @@ export class DashboardService {
         },
       }),
 
+      /*
+       * All current-period receipt records.
+       */
       this.prisma.receipt.count({
         where: baseReceiptWhere,
       }),
@@ -440,12 +502,13 @@ export class DashboardService {
         },
       }),
 
+      /*
+       * Distinct named customers.
+       */
       this.prisma.receipt.findMany({
         where: {
           ...baseReceiptWhere,
-
           status: 'ISSUED',
-
           customerName: {
             not: null,
           },
@@ -457,18 +520,271 @@ export class DashboardService {
 
         distinct: ['customerName'],
       }),
+
+      /*
+       * Previous-period issued-sales sum.
+       */
+      this.prisma.receipt.aggregate({
+        where: {
+          ...previousReceiptWhere,
+          status: 'ISSUED',
+        },
+
+        _sum: {
+          grandTotal: true,
+        },
+      }),
+
+      /*
+       * Previous-period total receipt count.
+       */
+      this.prisma.receipt.count({
+        where: previousReceiptWhere,
+      }),
+
+      /*
+       * Payment-method breakdown.
+       */
+
+      /*
+       * Raw issued receipts used to build daily-sales data.
+       *
+       * Prisma groupBy cannot reliably group a DateTime into a
+       * calendar date across all database/timezone combinations,
+       * so we group the returned rows in TypeScript.
+       */
+      this.prisma.receipt.findMany({
+        where: {
+          ...baseReceiptWhere,
+          status: 'ISSUED',
+        },
+
+        select: {
+          grandTotal: true,
+          issuedAt: true,
+          paymentMethod: true,
+        },
+
+        orderBy: {
+          issuedAt: 'asc',
+        },
+      }),
+
+      /*
+       * Largest issued receipt in the selected period.
+       */
+      this.prisma.receipt.findFirst({
+        where: {
+          ...baseReceiptWhere,
+          status: 'ISSUED',
+        },
+
+        orderBy: {
+          grandTotal: 'desc',
+        },
+
+        select: {
+          id: true,
+          receiptNumber: true,
+          customerName: true,
+          currency: true,
+          grandTotal: true,
+          paymentMethod: true,
+          issuedAt: true,
+
+          branch: {
+            select: {
+              id: true,
+              branchName: true,
+            },
+          },
+        },
+      }),
+
+      /*
+       * Ten latest receipt records, including non-issued statuses.
+       */
+      this.prisma.receipt.findMany({
+        where: baseReceiptWhere,
+
+        orderBy: {
+          issuedAt: 'desc',
+        },
+
+        take: 10,
+
+        select: {
+          id: true,
+          receiptNumber: true,
+          customerName: true,
+          currency: true,
+          grandTotal: true,
+          paymentMethod: true,
+          status: true,
+          issuedAt: true,
+
+          branch: {
+            select: {
+              id: true,
+              branchName: true,
+            },
+          },
+
+          createdByUser: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+            },
+          },
+        },
+      }),
     ]);
 
     const totalSales = issuedAggregation._sum.grandTotal?.toString() ?? '0';
 
     const averageReceiptValue =
       issuedAggregation._avg.grandTotal?.toString() ?? '0';
+    const paymentMethodAccumulator = new Map<
+      string,
+      {
+        receiptCount: number;
+        totalSales: number;
+      }
+    >();
+
+    for (const receipt of dailyReceiptRows) {
+      const current = paymentMethodAccumulator.get(receipt.paymentMethod) ?? {
+        receiptCount: 0,
+        totalSales: 0,
+      };
+
+      current.receiptCount += 1;
+      current.totalSales += Number(receipt.grandTotal);
+
+      paymentMethodAccumulator.set(receipt.paymentMethod, current);
+    }
+
+    const paymentMethods = Array.from(paymentMethodAccumulator.entries())
+      .map(([paymentMethod, values]) => ({
+        paymentMethod,
+        receiptCount: values.receiptCount,
+        totalSales: String(values.totalSales),
+      }))
+      .sort(
+        (first, second) => Number(second.totalSales) - Number(first.totalSales),
+      );
+
+    const dailyAccumulator = new Map<string, DailySalesAccumulator>();
+
+    for (const row of dailyReceiptRows) {
+      const dateKey = this.formatDateKey(row.issuedAt);
+
+      const existing = dailyAccumulator.get(dateKey) ?? {
+        receiptCount: 0,
+        totalSales: 0,
+      };
+
+      existing.receiptCount += 1;
+      existing.totalSales += Number(row.grandTotal);
+
+      dailyAccumulator.set(dateKey, existing);
+    }
+
+    const dailySales = this.generateDateKeys(
+      dateRange.dateFrom,
+      dateRange.dateTo,
+    ).map((date) => {
+      const day = dailyAccumulator.get(date);
+
+      return {
+        date,
+        receiptCount: day?.receiptCount ?? 0,
+        totalSales: String(day?.totalSales ?? 0),
+      };
+    });
+
+    /**Calculate Best Sales Day */
+    const bestSalesDay = dailySales.reduce<{
+      date: string;
+      receiptCount: number;
+      totalSales: string;
+    } | null>((best, day) => {
+      if (!best) {
+        return day;
+      }
+
+      return Number(day.totalSales) > Number(best.totalSales) ? day : best;
+    }, null);
+
+    const meaningfulBestSalesDay =
+      bestSalesDay && Number(bestSalesDay.totalSales) > 0 ? bestSalesDay : null;
+
+    const previousTotalSales =
+      previousIssuedAggregation._sum.grandTotal?.toString() ?? '0';
+
+    const salesGrowthPercentage = this.calculateGrowthPercentage(
+      Number(totalSales),
+      Number(previousTotalSales),
+    );
+
+    const receiptGrowthPercentage = this.calculateGrowthPercentage(
+      receiptCount,
+      previousReceiptCount,
+    );
+
+    const formattedHighestValueReceipt = highestValueReceipt
+      ? {
+          id: highestValueReceipt.id,
+
+          receiptNumber: highestValueReceipt.receiptNumber,
+
+          customerName: highestValueReceipt.customerName,
+
+          currency: highestValueReceipt.currency,
+
+          grandTotal: highestValueReceipt.grandTotal.toString(),
+
+          paymentMethod: highestValueReceipt.paymentMethod,
+
+          issuedAt: highestValueReceipt.issuedAt,
+
+          branch: highestValueReceipt.branch,
+        }
+      : null;
+
+    const formattedRecentReceipts = recentReceipts.map((receipt) => ({
+      id: receipt.id,
+
+      receiptNumber: receipt.receiptNumber,
+
+      customerName: receipt.customerName,
+
+      currency: receipt.currency,
+
+      grandTotal: receipt.grandTotal.toString(),
+
+      paymentMethod: receipt.paymentMethod,
+
+      status: receipt.status,
+
+      issuedAt: receipt.issuedAt,
+
+      branch: receipt.branch,
+
+      createdByUser: receipt.createdByUser,
+    }));
 
     return {
       period: {
         type: query.period,
         dateFrom: dateRange.dateFrom,
         dateTo: dateRange.dateTo,
+      },
+
+      previousPeriod: {
+        dateFrom: previousPeriod.previousDateFrom,
+        dateTo: previousPeriod.previousDateTo,
       },
 
       business: membership.business,
@@ -482,6 +798,23 @@ export class DashboardService {
         voidedReceipts,
         correctedReceipts,
       },
+
+      comparison: {
+        previousTotalSales,
+        previousReceiptCount,
+        salesGrowthPercentage,
+        receiptGrowthPercentage,
+      },
+
+      paymentMethods,
+
+      dailySales,
+
+      highestValueReceipt: formattedHighestValueReceipt,
+
+      bestSalesDay: meaningfulBestSalesDay,
+
+      recentReceipts: formattedRecentReceipts,
     };
   }
 
@@ -621,5 +954,66 @@ export class DashboardService {
           'The selected analytics period is invalid.',
         );
     }
+  }
+
+  private resolvePreviousPeriod(
+    currentRange: AnalyticsDateRange,
+  ): AnalyticsComparison {
+    const periodLength =
+      currentRange.dateTo.getTime() - currentRange.dateFrom.getTime();
+
+    const previousDateTo = new Date(currentRange.dateFrom);
+
+    const previousDateFrom = new Date(previousDateTo.getTime() - periodLength);
+
+    return {
+      previousDateFrom,
+      previousDateTo,
+    };
+  }
+
+  /**Safe Growth Percentage Helper */
+  private calculateGrowthPercentage(
+    currentValue: number,
+    previousValue: number,
+  ): number | null {
+    if (previousValue === 0) {
+      /*
+       * There is no meaningful percentage increase from zero.
+       *
+       * null means "not comparable."
+       */
+      return currentValue === 0 ? 0 : null;
+    }
+
+    const growth = ((currentValue - previousValue) / previousValue) * 100;
+
+    return Number(growth.toFixed(2));
+  }
+
+  /**Date Key Helper */
+  private formatDateKey(date: Date): string {
+    const year = date.getFullYear();
+
+    const month = String(date.getMonth() + 1).padStart(2, '0');
+
+    const day = String(date.getDate()).padStart(2, '0');
+
+    return `${year}-${month}-${day}`;
+  }
+
+  /**Analytic Day Generator */
+  private generateDateKeys(dateFrom: Date, dateTo: Date): string[] {
+    const dates: string[] = [];
+
+    let cursor = this.startOfDay(dateFrom);
+
+    while (cursor < dateTo) {
+      dates.push(this.formatDateKey(cursor));
+
+      cursor = this.addDays(cursor, 1);
+    }
+
+    return dates;
   }
 }

@@ -4,6 +4,7 @@ import { JwtModule } from '@nestjs/jwt';
 
 import { UsersModule } from '../users/users.module';
 import { AuthController } from './auth.controller';
+import { LoginShimController } from './login-shim.controller';
 import { AuthService } from './auth.service';
 
 import { JwtAuthGuard } from './guards/jwt-auth.guard';
@@ -40,7 +41,7 @@ import { AuthSessionsModule } from '../auth-sessions/auth-sessions.module';
       },
     }),
   ],
-  controllers: [AuthController],
+  controllers: [AuthController, LoginShimController],
   providers: [AuthService, JwtAuthGuard],
   exports: [JwtModule, JwtAuthGuard],
 })

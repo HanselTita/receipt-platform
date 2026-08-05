@@ -3,13 +3,14 @@ import {
   IsDateString,
   IsEnum,
   IsInt,
+  IsNumberString,
   IsOptional,
   IsString,
   Max,
   Min,
 } from 'class-validator';
 
-import { ReceiptStatus } from '../../../generated/prisma/enums';
+import { PaymentMethod, ReceiptStatus } from '../../../generated/prisma/enums';
 
 export class QueryReceiptsDto {
   @IsOptional()
@@ -33,6 +34,18 @@ export class QueryReceiptsDto {
   @IsOptional()
   @IsEnum(ReceiptStatus)
   status?: ReceiptStatus;
+
+  @IsOptional()
+  @IsEnum(PaymentMethod)
+  paymentMethod?: PaymentMethod;
+
+  @IsOptional()
+  @IsNumberString()
+  minAmount?: string;
+
+  @IsOptional()
+  @IsNumberString()
+  maxAmount?: string;
 
   @IsOptional()
   @IsDateString()

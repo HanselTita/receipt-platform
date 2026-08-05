@@ -321,6 +321,26 @@ export class ReceiptsService {
       query.dateTo,
     );
 
+    const minAmount =
+      query.minAmount !== undefined ? new Decimal(query.minAmount) : undefined;
+
+    const maxAmount =
+      query.maxAmount !== undefined ? new Decimal(query.maxAmount) : undefined;
+
+    if (minAmount && minAmount.isNegative()) {
+      throw new BadRequestException('Minimum amount cannot be negative.');
+    }
+
+    if (maxAmount && maxAmount.isNegative()) {
+      throw new BadRequestException('Maximum amount cannot be negative.');
+    }
+
+    if (minAmount && maxAmount && minAmount.greaterThan(maxAmount)) {
+      throw new BadRequestException(
+        'Minimum amount cannot be greater than maximum amount.',
+      );
+    }
+
     const search = query.search?.trim();
 
     const where = {
@@ -365,6 +385,30 @@ export class ReceiptsService {
       ...(issuedAtFilter
         ? {
             issuedAt: issuedAtFilter,
+          }
+        : {}),
+
+      ...(query.paymentMethod
+        ? {
+            paymentMethod: query.paymentMethod,
+          }
+        : {}),
+
+      ...(minAmount || maxAmount
+        ? {
+            grandTotal: {
+              ...(minAmount
+                ? {
+                    gte: minAmount.toFixed(4),
+                  }
+                : {}),
+
+              ...(maxAmount
+                ? {
+                    lte: maxAmount.toFixed(4),
+                  }
+                : {}),
+            },
           }
         : {}),
     };

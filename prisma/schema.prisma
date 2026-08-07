@@ -25,6 +25,7 @@ model Business {
   branches    Branch[]
   memberships BusinessMembership[]
   receipts    Receipt[]
+  customers   Customer[]
 }
 
 model Branch {
@@ -97,6 +98,27 @@ model BusinessMembership {
   @@unique([userId, businessId])
 }
 
+model Customer {
+  id         String @id @default(cuid())
+  businessId String
+
+  fullName String?
+  phone    String?
+  email    String?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  receipts Receipt[]
+
+  @@index([businessId])
+  @@index([businessId, fullName])
+  @@index([businessId, phone])
+  @@index([businessId, email])
+}
+
 model BranchAssignment {
   id         String   @id @default(uuid())
   isActive   Boolean  @default(true)
@@ -150,6 +172,7 @@ model Receipt {
   customerName  String?
   customerPhone String?
   customerEmail String?
+  customerId    String?
 
   currency      String
   subtotal      Decimal
@@ -175,11 +198,14 @@ model Receipt {
 
   items ReceiptItem[]
 
+  customer Customer? @relation(fields: [customerId], references: [id], onDelete: SetNull)
+
   @@unique([branchId, receiptNumber])
   @@index([businessId])
   @@index([branchId])
   @@index([createdByUserId])
   @@index([issuedAt])
+  @@index([customerId])
 }
 
 model ReceiptItem {

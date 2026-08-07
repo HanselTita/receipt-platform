@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { ReceiptItemDto } from './dto/receipt-item.dto';
 import { QueryReceiptsDto } from './dto/query-receipts.dto';
+import { CustomersService } from '../customers/customers.service';
 
 type CalculatedItem = {
   description: string;
@@ -25,7 +26,10 @@ type CalculatedItem = {
 
 @Injectable()
 export class ReceiptsService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly customersService: CustomersService,
+  ) {}
 
   async create(userId: string, dto: CreateReceiptDto) {
     /*
@@ -133,13 +137,25 @@ export class ReceiptsService {
         }
 
         /*
-         * 4. Atomically increment the branch counter.
+         * 4. Resolve the optional customer.
          *
-         * Example:
-         * Existing nextReceiptNumber = 1
-         * Updated nextReceiptNumber  = 2
-         * This receipt uses sequence = 1
+         * If no customer details were provided, this returns null.
+         *
+         * If customer information was provided:
+         * - reuse an existing customer when possible, or
+         * - create a new customer automatically.
+         *
+         * The customer operation uses this same Prisma transaction.
          */
+        const customer = await this.customersService.findOrCreateCustomer(
+          {
+            businessId: business.id,
+            fullName: dto.customerName,
+            phone: dto.customerPhone,
+            email: dto.customerEmail,
+          },
+          transaction,
+        );
         const updatedBranch = await transaction.branch.update({
           where: {
             id: branch.id,
@@ -176,6 +192,8 @@ export class ReceiptsService {
           data: {
             receiptNumber,
             verificationCode,
+
+            customerId: customer?.id ?? null,
 
             customerName: dto.customerName?.trim() || null,
 

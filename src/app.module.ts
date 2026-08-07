@@ -9,7 +9,7 @@ import { HealthModule } from './health/health.module';
 import { DashboardModule } from './dashboard/dashboard.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { VerificationModule } from './verification/verification.module';
-
+import { CustomersModule } from './customers/customers.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -24,6 +24,7 @@ import { VerificationModule } from './verification/verification.module';
     DashboardModule,
     ReceiptsModule,
     VerificationModule,
+    CustomersModule,
   ],
 })
 export class AppModule {}

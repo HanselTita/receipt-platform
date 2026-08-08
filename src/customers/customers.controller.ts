@@ -12,6 +12,7 @@ import {
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AccessTokenPayload } from '../auth/types/access-token-payload.type';
+import { BusinessContextService } from '../business-context/business-context.service';
 
 import { CustomersService } from './customers.service';
 import { CreateCustomerDto } from './dto/create-customer.dto';
@@ -21,35 +22,72 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 @Controller('customers')
 @UseGuards(JwtAuthGuard)
 export class CustomersController {
-  constructor(private readonly customersService: CustomersService) {}
+  constructor(
+    private readonly customersService: CustomersService,
+    private readonly businessContextService: BusinessContextService,
+  ) {}
 
   @Get()
-  findAll(
+  async findAll(
     @CurrentUser() user: AccessTokenPayload,
     @Query() query: SearchCustomersDto,
   ) {
-    return this.customersService.search(user.sub, query);
+    const business = await this.businessContextService.getCurrentBusiness(
+      user.sub,
+    );
+
+    return this.customersService.search(business.id, query);
+  }
+
+  @Get('search')
+  async search(
+    @CurrentUser() user: AccessTokenPayload,
+    @Query() query: SearchCustomersDto,
+  ) {
+    const business = await this.businessContextService.getCurrentBusiness(
+      user.sub,
+    );
+
+    return this.customersService.search(business.id, {
+      ...query,
+      limit: Math.min(query.limit ?? 10, 20),
+    });
   }
 
   @Get(':id')
-  findOne(@CurrentUser() user: AccessTokenPayload, @Param('id') id: string) {
-    return this.customersService.findOne(user.sub, id);
+  async findOne(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id') id: string,
+  ) {
+    const business = await this.businessContextService.getCurrentBusiness(
+      user.sub,
+    );
+
+    return this.customersService.findOne(business.id, id);
   }
 
   @Post()
-  create(
+  async create(
     @CurrentUser() user: AccessTokenPayload,
     @Body() dto: CreateCustomerDto,
   ) {
-    return this.customersService.create(user.sub, dto);
+    const business = await this.businessContextService.getCurrentBusiness(
+      user.sub,
+    );
+
+    return this.customersService.create(business.id, dto);
   }
 
   @Patch(':id')
-  update(
+  async update(
     @CurrentUser() user: AccessTokenPayload,
     @Param('id') id: string,
     @Body() dto: UpdateCustomerDto,
   ) {
-    return this.customersService.update(user.sub, id, dto);
+    const business = await this.businessContextService.getCurrentBusiness(
+      user.sub,
+    );
+
+    return this.customersService.update(business.id, id, dto);
   }
 }

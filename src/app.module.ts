@@ -10,6 +10,7 @@ import { DashboardModule } from './dashboard/dashboard.module';
 import { ReceiptsModule } from './receipts/receipts.module';
 import { VerificationModule } from './verification/verification.module';
 import { CustomersModule } from './customers/customers.module';
+import { BusinessContextModule } from './business-context/business-context.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -25,6 +26,7 @@ import { CustomersModule } from './customers/customers.module';
     ReceiptsModule,
     VerificationModule,
     CustomersModule,
+    BusinessContextModule,
   ],
 })
 export class AppModule {}

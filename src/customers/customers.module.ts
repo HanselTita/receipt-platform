@@ -5,9 +5,10 @@ import { PrismaModule } from '../prisma/prisma.module';
 
 import { CustomersController } from './customers.controller';
 import { CustomersService } from './customers.service';
+import { BusinessContextModule } from '../business-context/business-context.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule],
+  imports: [PrismaModule, AuthModule, BusinessContextModule],
   controllers: [CustomersController],
   providers: [CustomersService],
   exports: [CustomersService],

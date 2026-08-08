@@ -233,6 +233,15 @@ export class ReceiptsService {
            * Return everything needed to display the completed receipt.
            */
           include: {
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                phone: true,
+                email: true,
+              },
+            },
+
             items: {
               orderBy: {
                 createdAt: 'asc',

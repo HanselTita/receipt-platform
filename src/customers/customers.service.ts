@@ -112,6 +112,39 @@ export class CustomersService {
       throw new BadRequestException('Provide at least one customer detail.');
     }
 
+    if (phone) {
+      const existingByPhone = await this.prisma.customer.findFirst({
+        where: {
+          businessId,
+          phone,
+        },
+      });
+
+      if (existingByPhone) {
+        throw new BadRequestException(
+          'A customer with this phone number already exists.',
+        );
+      }
+    }
+
+    if (email) {
+      const existingByEmail = await this.prisma.customer.findFirst({
+        where: {
+          businessId,
+          email: {
+            equals: email,
+            mode: 'insensitive',
+          },
+        },
+      });
+
+      if (existingByEmail) {
+        throw new BadRequestException(
+          'A customer with this email address already exists.',
+        );
+      }
+    }
+
     return this.prisma.customer.create({
       data: {
         businessId,
@@ -251,6 +284,53 @@ export class CustomersService {
 
   async update(businessId: string, customerId: string, dto: UpdateCustomerDto) {
     await this.findOne(businessId, customerId);
+
+    const phone =
+      dto.phone !== undefined
+        ? this.normalizeOptionalText(dto.phone)
+        : undefined;
+
+    const email =
+      dto.email !== undefined ? this.normalizeEmail(dto.email) : undefined;
+
+    if (phone) {
+      const existingByPhone = await this.prisma.customer.findFirst({
+        where: {
+          businessId,
+          phone,
+          NOT: {
+            id: customerId,
+          },
+        },
+      });
+
+      if (existingByPhone) {
+        throw new BadRequestException(
+          'Another customer already uses this phone number.',
+        );
+      }
+    }
+
+    if (email) {
+      const existingByEmail = await this.prisma.customer.findFirst({
+        where: {
+          businessId,
+          email: {
+            equals: email,
+            mode: 'insensitive',
+          },
+          NOT: {
+            id: customerId,
+          },
+        },
+      });
+
+      if (existingByEmail) {
+        throw new BadRequestException(
+          'Another customer already uses this email address.',
+        );
+      }
+    }
 
     return this.prisma.customer.update({
       where: {

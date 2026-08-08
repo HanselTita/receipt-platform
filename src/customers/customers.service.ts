@@ -192,13 +192,61 @@ export class CustomersService {
         id: customerId,
         businessId,
       },
+      include: {
+        receipts: {
+          orderBy: {
+            issuedAt: 'desc',
+          },
+          take: 10,
+          select: {
+            id: true,
+            receiptNumber: true,
+            grandTotal: true,
+            currency: true,
+            status: true,
+            paymentMethod: true,
+            issuedAt: true,
+          },
+        },
+      },
     });
 
     if (!customer) {
       throw new NotFoundException('Customer not found.');
     }
 
-    return customer;
+    const aggregates = await this.prisma.receipt.aggregate({
+      where: {
+        businessId,
+        customerId,
+        status: 'ISSUED',
+      },
+      _count: {
+        id: true,
+      },
+      _sum: {
+        grandTotal: true,
+      },
+    });
+
+    return {
+      customer: {
+        id: customer.id,
+        fullName: customer.fullName,
+        phone: customer.phone,
+        email: customer.email,
+        createdAt: customer.createdAt,
+        updatedAt: customer.updatedAt,
+      },
+
+      stats: {
+        receiptCount: aggregates._count.id,
+
+        totalSpent: aggregates._sum.grandTotal?.toString() ?? '0',
+      },
+
+      recentReceipts: customer.receipts,
+    };
   }
 
   async update(businessId: string, customerId: string, dto: UpdateCustomerDto) {

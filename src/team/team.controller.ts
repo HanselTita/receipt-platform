@@ -16,6 +16,7 @@ import { AddTeamMemberDto } from './dto/add-team-member.dto';
 import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
 import { TeamService } from './team.service';
 import { UpdateBranchAssignmentsDto } from './dto/update-branch-assignments.dto';
+import { CreateStaffAccountDto } from './dto/create-staff-account.dto';
 
 @Controller('team')
 @UseGuards(JwtAuthGuard)
@@ -33,6 +34,17 @@ export class TeamController {
     @Body() dto: AddTeamMemberDto,
   ) {
     return this.teamService.addMember(user.sub, dto);
+  }
+
+  @Post('create-account')
+  createStaffAccount(
+    @CurrentUser()
+    user: AccessTokenPayload,
+
+    @Body()
+    dto: CreateStaffAccountDto,
+  ) {
+    return this.teamService.createStaffAccount(user.sub, dto);
   }
 
   @Patch(':membershipId')

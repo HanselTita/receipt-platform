@@ -38,9 +38,9 @@ export class BranchesService {
       throw new ForbiddenException('Active business membership required.');
     }
 
-    if (membership.role !== 'OWNER' && membership.role !== 'ADMIN') {
+    if (membership.role !== 'OWNER') {
       throw new ForbiddenException(
-        'Only owners and administrators can manage branches.',
+        'Only the business owner can perform this action.',
       );
     }
 

@@ -299,49 +299,11 @@ export class ReceiptsService {
     );
   }
   async findAll(userId: string, query: QueryReceiptsDto) {
+    const access = await this.getReceiptAccessContext(userId);
+
     const page = query.page;
     const limit = query.limit;
     const skip = (page - 1) * limit;
-
-    const assignments = await this.prisma.branchAssignment.findMany({
-      where: {
-        isActive: true,
-        membership: {
-          userId,
-          status: 'ACTIVE',
-        },
-      },
-      select: {
-        branchId: true,
-        membership: {
-          select: {
-            businessId: true,
-          },
-        },
-      },
-    });
-
-    const branchIds = assignments.map((assignment) => assignment.branchId);
-
-    const businessIds = [
-      ...new Set(
-        assignments.map((assignment) => assignment.membership.businessId),
-      ),
-    ];
-
-    if (branchIds.length === 0) {
-      return {
-        data: [],
-        pagination: {
-          page,
-          limit,
-          total: 0,
-          totalPages: 0,
-          hasNextPage: false,
-          hasPreviousPage: false,
-        },
-      };
-    }
 
     const issuedAtFilter = this.buildIssuedAtFilter(
       query.dateFrom,
@@ -370,14 +332,25 @@ export class ReceiptsService {
 
     const search = query.search?.trim();
 
-    const where = {
-      branchId: {
-        in: branchIds,
-      },
+    /*
+     * OWNER:
+     * All receipts belonging to the business.
+     *
+     * STAFF:
+     * Only receipts personally created by
+     * the authenticated staff member.
+     */
+    const accessWhere = access.isOwner
+      ? {
+          businessId: access.businessId,
+        }
+      : {
+          businessId: access.businessId,
+          createdByUserId: userId,
+        };
 
-      businessId: {
-        in: businessIds,
-      },
+    const where = {
+      ...accessWhere,
 
       ...(search
         ? {
@@ -445,9 +418,11 @@ export class ReceiptsService {
         where,
         skip,
         take: limit,
+
         orderBy: {
           issuedAt: 'desc',
         },
+
         select: {
           id: true,
           receiptNumber: true,
@@ -533,11 +508,31 @@ export class ReceiptsService {
   }
 
   async findOne(userId: string, receiptId: string) {
-    const receipt = await this.prisma.receipt.findUnique({
+    const access = await this.getReceiptAccessContext(userId);
+
+    const receipt = await this.prisma.receipt.findFirst({
       where: {
         id: receiptId,
+
+        businessId: access.businessId,
+
+        ...(!access.isOwner
+          ? {
+              createdByUserId: userId,
+            }
+          : {}),
       },
+
       include: {
+        customer: {
+          select: {
+            id: true,
+            fullName: true,
+            phone: true,
+            email: true,
+          },
+        },
+
         items: {
           orderBy: {
             createdAt: 'asc',
@@ -584,28 +579,6 @@ export class ReceiptsService {
 
     if (!receipt) {
       throw new NotFoundException('Receipt was not found.');
-    }
-
-    const assignment = await this.prisma.branchAssignment.findFirst({
-      where: {
-        branchId: receipt.branchId,
-        isActive: true,
-
-        membership: {
-          userId,
-          businessId: receipt.businessId,
-          status: 'ACTIVE',
-        },
-      },
-      select: {
-        id: true,
-      },
-    });
-
-    if (!assignment) {
-      throw new NotFoundException(
-        'Receipt was not found or you do not have access to it.',
-      );
     }
 
     return {
@@ -698,5 +671,48 @@ export class ReceiptsService {
 
   private generateVerificationCode(): string {
     return randomBytes(16).toString('hex').toUpperCase();
+  }
+
+  private async getReceiptAccessContext(userId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+      select: {
+        id: true,
+        businessId: true,
+        role: true,
+        business: {
+          select: {
+            id: true,
+            businessName: true,
+          },
+        },
+        branchAssignments: {
+          where: {
+            isActive: true,
+          },
+          select: {
+            branchId: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    return {
+      businessId: membership.businessId,
+      role: membership.role,
+      isOwner: membership.role === 'OWNER',
+      assignedBranchIds: membership.branchAssignments.map(
+        (assignment) => assignment.branchId,
+      ),
+    };
   }
 }

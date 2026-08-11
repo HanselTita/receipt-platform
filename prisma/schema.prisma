@@ -78,6 +78,7 @@ model User {
   memberships     BusinessMembership[]
   authSessions    AuthSession[]
   createdReceipts Receipt[]
+  createdCustomers Customer[]
 }
 
 model BusinessMembership {
@@ -102,6 +103,7 @@ model BusinessMembership {
 model Customer {
   id         String @id @default(cuid())
   businessId String
+  createdByUserId String?
 
   fullName String?
   phone    String?
@@ -111,6 +113,8 @@ model Customer {
   updatedAt DateTime @updatedAt
 
   business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  createdByUser User? @relation(fields: [createdByUserId], references: [id], onDelete: SetNull)
 
   receipts Receipt[]
 

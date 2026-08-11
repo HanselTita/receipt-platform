@@ -41,9 +41,9 @@ export class TeamService {
       throw new ForbiddenException('Active business membership required.');
     }
 
-    if (membership.role !== 'OWNER' && membership.role !== 'ADMIN') {
+    if (membership.role !== 'OWNER') {
       throw new ForbiddenException(
-        'Only owners and administrators can manage team members.',
+        'Only the business owner can perform this action.',
       );
     }
 

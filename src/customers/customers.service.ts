@@ -2,6 +2,7 @@ import {
   BadRequestException,
   Injectable,
   NotFoundException,
+  ForbiddenException,
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
@@ -11,6 +12,7 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 
 type FindOrCreateCustomerInput = {
   businessId: string;
+  createdByUserId: string;
   fullName?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -37,7 +39,13 @@ export class CustomersService {
   }
 
   async findOrCreateCustomer(
-    { businessId, fullName, phone, email }: FindOrCreateCustomerInput,
+    {
+      businessId,
+      createdByUserId,
+      fullName,
+      phone,
+      email,
+    }: FindOrCreateCustomerInput,
     database: CustomerDatabaseClient = this.prisma,
   ) {
     const normalizedName = this.normalizeOptionalText(fullName);
@@ -58,6 +66,7 @@ export class CustomersService {
       existingCustomer = await database.customer.findFirst({
         where: {
           businessId,
+          createdByUserId,
           phone: normalizedPhone,
         },
       });
@@ -67,6 +76,8 @@ export class CustomersService {
       existingCustomer = await database.customer.findFirst({
         where: {
           businessId,
+          createdByUserId,
+
           email: {
             equals: normalizedEmail,
             mode: 'insensitive',
@@ -79,6 +90,8 @@ export class CustomersService {
       existingCustomer = await database.customer.findFirst({
         where: {
           businessId,
+          createdByUserId,
+
           fullName: {
             equals: normalizedName,
             mode: 'insensitive',
@@ -86,7 +99,6 @@ export class CustomersService {
         },
       });
     }
-
     if (existingCustomer) {
       return existingCustomer;
     }
@@ -94,6 +106,7 @@ export class CustomersService {
     return database.customer.create({
       data: {
         businessId,
+        createdByUserId,
         fullName: normalizedName,
         phone: normalizedPhone,
         email: normalizedEmail,
@@ -101,7 +114,11 @@ export class CustomersService {
     });
   }
 
-  async create(businessId: string, dto: CreateCustomerDto) {
+  async create(userId: string, dto: CreateCustomerDto) {
+    const access = await this.getCustomerAccessContext(userId);
+
+    const businessId = access.businessId;
+
     const fullName = this.normalizeOptionalText(dto.fullName);
 
     const phone = this.normalizeOptionalText(dto.phone);
@@ -116,6 +133,13 @@ export class CustomersService {
       const existingByPhone = await this.prisma.customer.findFirst({
         where: {
           businessId,
+
+          ...(!access.isOwner
+            ? {
+                createdByUserId: userId,
+              }
+            : {}),
+
           phone,
         },
       });
@@ -131,6 +155,13 @@ export class CustomersService {
       const existingByEmail = await this.prisma.customer.findFirst({
         where: {
           businessId,
+
+          ...(!access.isOwner
+            ? {
+                createdByUserId: userId,
+              }
+            : {}),
+
           email: {
             equals: email,
             mode: 'insensitive',
@@ -148,6 +179,7 @@ export class CustomersService {
     return this.prisma.customer.create({
       data: {
         businessId,
+        createdByUserId: userId,
         fullName,
         phone,
         email,
@@ -155,7 +187,10 @@ export class CustomersService {
     });
   }
 
-  async search(businessId: string, query: SearchCustomersDto) {
+  async search(userId: string, query: SearchCustomersDto) {
+    const access = await this.getCustomerAccessContext(userId);
+
+    const businessId = access.businessId;
     const page = query.page;
     const limit = query.limit;
 
@@ -163,6 +198,12 @@ export class CustomersService {
 
     const where = {
       businessId,
+
+      ...(!access.isOwner
+        ? {
+            createdByUserId: userId,
+          }
+        : {}),
 
       ...(search
         ? {
@@ -219,18 +260,38 @@ export class CustomersService {
     };
   }
 
-  async findOne(businessId: string, customerId: string) {
+  async findOne(userId: string, customerId: string) {
+    const access = await this.getCustomerAccessContext(userId);
+
+    const businessId = access.businessId;
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: customerId,
         businessId,
+
+        ...(!access.isOwner
+          ? {
+              createdByUserId: userId,
+            }
+          : {}),
       },
+
       include: {
         receipts: {
+          where: {
+            ...(!access.isOwner
+              ? {
+                  createdByUserId: userId,
+                }
+              : {}),
+          },
+
           orderBy: {
             issuedAt: 'desc',
           },
+
           take: 10,
+
           select: {
             id: true,
             receiptNumber: true,
@@ -253,10 +314,18 @@ export class CustomersService {
         businessId,
         customerId,
         status: 'ISSUED',
+
+        ...(!access.isOwner
+          ? {
+              createdByUserId: userId,
+            }
+          : {}),
       },
+
       _count: {
         id: true,
       },
+
       _sum: {
         grandTotal: true,
       },
@@ -282,7 +351,12 @@ export class CustomersService {
     };
   }
 
-  async update(businessId: string, customerId: string, dto: UpdateCustomerDto) {
+  async update(userId: string, customerId: string, dto: UpdateCustomerDto) {
+    const access = await this.getCustomerAccessContext(userId);
+
+    const businessId = access.businessId;
+
+    await this.findOne(userId, customerId);
     await this.findOne(businessId, customerId);
 
     const phone =
@@ -297,7 +371,15 @@ export class CustomersService {
       const existingByPhone = await this.prisma.customer.findFirst({
         where: {
           businessId,
+
+          ...(!access.isOwner
+            ? {
+                createdByUserId: userId,
+              }
+            : {}),
+
           phone,
+
           NOT: {
             id: customerId,
           },
@@ -315,10 +397,18 @@ export class CustomersService {
       const existingByEmail = await this.prisma.customer.findFirst({
         where: {
           businessId,
+
+          ...(!access.isOwner
+            ? {
+                createdByUserId: userId,
+              }
+            : {}),
+
           email: {
             equals: email,
             mode: 'insensitive',
           },
+
           NOT: {
             id: customerId,
           },
@@ -356,5 +446,30 @@ export class CustomersService {
           : {}),
       },
     });
+  }
+
+  private async getCustomerAccessContext(userId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      select: {
+        businessId: true,
+        role: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    return {
+      businessId: membership.businessId,
+      isOwner: membership.role === 'OWNER',
+    };
   }
 }

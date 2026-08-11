@@ -150,6 +150,7 @@ export class ReceiptsService {
         const customer = await this.customersService.findOrCreateCustomer(
           {
             businessId: business.id,
+            createdByUserId: userId,
             fullName: dto.customerName,
             phone: dto.customerPhone,
             email: dto.customerEmail,

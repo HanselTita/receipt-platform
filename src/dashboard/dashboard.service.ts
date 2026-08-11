@@ -1,5 +1,6 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
 } from '@nestjs/common';
@@ -156,12 +157,15 @@ export class DashboardService {
      * An active membership without a branch assignment should
      * not expose receipt statistics.
      */
-    const accessibleReceiptWhere = {
-      businessId: business.id,
-      branchId: {
-        in: assignedBranchIds,
-      },
-    };
+    const accessibleReceiptWhere =
+      membership.role === 'OWNER'
+        ? {
+            businessId: business.id,
+          }
+        : {
+            businessId: business.id,
+            createdByUserId: userId,
+          };
 
     /*
      * 6. Run independent dashboard queries together.
@@ -290,7 +294,8 @@ export class DashboardService {
         todayReceipts,
         todaySales,
         totalReceipts,
-        employees: business._count.memberships,
+        employees:
+          membership.role === 'OWNER' ? business._count.memberships : 0,
       },
 
       recentReceipts: recentReceipts.map((receipt) => ({
@@ -354,7 +359,11 @@ export class DashboardService {
     if (!membership) {
       throw new NotFoundException('No active business membership was found.');
     }
-
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Analytics are available only to the business owner.',
+      );
+    }
     const branchIds = membership.branchAssignments.map(
       (assignment) => assignment.branchId,
     );

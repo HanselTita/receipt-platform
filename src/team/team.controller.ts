@@ -15,6 +15,7 @@ import type { AccessTokenPayload } from '../auth/types/access-token-payload.type
 import { AddTeamMemberDto } from './dto/add-team-member.dto';
 import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
 import { TeamService } from './team.service';
+import { UpdateBranchAssignmentsDto } from './dto/update-branch-assignments.dto';
 
 @Controller('team')
 @UseGuards(JwtAuthGuard)
@@ -42,5 +43,29 @@ export class TeamController {
     @Body() dto: UpdateTeamMemberDto,
   ) {
     return this.teamService.updateMember(user.sub, membershipId, dto);
+  }
+
+  @Get(':membershipId')
+  findOne(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('membershipId')
+    membershipId: string,
+  ) {
+    return this.teamService.findOne(user.sub, membershipId);
+  }
+
+  @Patch(':membershipId/branches')
+  updateBranchAssignments(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('membershipId')
+    membershipId: string,
+    @Body()
+    dto: UpdateBranchAssignmentsDto,
+  ) {
+    return this.teamService.updateBranchAssignments(
+      user.sub,
+      membershipId,
+      dto.branchIds,
+    );
   }
 }

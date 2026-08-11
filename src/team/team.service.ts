@@ -224,4 +224,220 @@ export class TeamService {
       },
     });
   }
+
+  async findOne(userId: string, membershipId: string) {
+    const { business } = await this.getManagementContext(userId);
+
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        id: membershipId,
+        businessId: business.id,
+        status: {
+          not: 'REMOVED',
+        },
+      },
+      select: {
+        id: true,
+        role: true,
+        status: true,
+        joinedAt: true,
+
+        user: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+            email: true,
+            phone: true,
+            isActive: true,
+          },
+        },
+
+        branchAssignments: {
+          select: {
+            id: true,
+            branchId: true,
+            isActive: true,
+
+            branch: {
+              select: {
+                id: true,
+                branchName: true,
+                isMainBranch: true,
+                isActive: true,
+              },
+            },
+          },
+          orderBy: {
+            assignedAt: 'asc',
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException('Team member was not found.');
+    }
+
+    return membership;
+  }
+
+  async updateBranchAssignments(
+    userId: string,
+    membershipId: string,
+    branchIds: string[],
+  ) {
+    const { business } = await this.getManagementContext(userId);
+
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        id: membershipId,
+        businessId: business.id,
+        status: {
+          not: 'REMOVED',
+        },
+      },
+      select: {
+        id: true,
+        role: true,
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException('Team member was not found.');
+    }
+
+    if (membership.role === 'OWNER') {
+      throw new BadRequestException(
+        'The business owner branch assignments cannot be changed through this action.',
+      );
+    }
+
+    /*
+     * Confirm every submitted branch belongs to
+     * the current business and is active.
+     */
+    const branches =
+      branchIds.length > 0
+        ? await this.prisma.branch.findMany({
+            where: {
+              businessId: business.id,
+              id: {
+                in: branchIds,
+              },
+              isActive: true,
+            },
+            select: {
+              id: true,
+            },
+          })
+        : [];
+
+    if (branches.length !== branchIds.length) {
+      throw new BadRequestException(
+        'One or more selected branches are invalid or inactive.',
+      );
+    }
+
+    const selectedBranchIds = new Set(branchIds);
+
+    return this.prisma.$transaction(async (transaction) => {
+      const existingAssignments = await transaction.branchAssignment.findMany({
+        where: {
+          membershipId,
+        },
+      });
+
+      /*
+       * Deactivate assignments that are no
+       * longer selected.
+       */
+      for (const assignment of existingAssignments) {
+        if (
+          !selectedBranchIds.has(assignment.branchId) &&
+          assignment.isActive
+        ) {
+          await transaction.branchAssignment.update({
+            where: {
+              id: assignment.id,
+            },
+            data: {
+              isActive: false,
+            },
+          });
+        }
+      }
+
+      /*
+       * Create or reactivate every selected
+       * branch assignment.
+       */
+      for (const branchId of branchIds) {
+        const existing = existingAssignments.find(
+          (assignment) => assignment.branchId === branchId,
+        );
+
+        if (existing) {
+          if (!existing.isActive) {
+            await transaction.branchAssignment.update({
+              where: {
+                id: existing.id,
+              },
+              data: {
+                isActive: true,
+              },
+            });
+          }
+
+          continue;
+        }
+
+        await transaction.branchAssignment.create({
+          data: {
+            membershipId,
+            branchId,
+            isActive: true,
+          },
+        });
+      }
+
+      return transaction.businessMembership.findUnique({
+        where: {
+          id: membershipId,
+        },
+        select: {
+          id: true,
+          role: true,
+          status: true,
+
+          user: {
+            select: {
+              id: true,
+              firstName: true,
+              lastName: true,
+              email: true,
+            },
+          },
+
+          branchAssignments: {
+            where: {
+              isActive: true,
+            },
+            select: {
+              id: true,
+              branchId: true,
+
+              branch: {
+                select: {
+                  id: true,
+                  branchName: true,
+                  isMainBranch: true,
+                },
+              },
+            },
+          },
+        },
+      });
+    });
+  }
 }

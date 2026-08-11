@@ -39,6 +39,7 @@ model Branch {
   receiptPrefix     String   @default("RCP")
   nextReceiptNumber Int      @default(1)
   isMainBranch      Boolean  @default(false)
+  isActive          Boolean  @default(true)
   createdAt         DateTime @default(now())
   updatedAt         DateTime @updatedAt
 

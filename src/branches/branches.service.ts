@@ -1,4 +1,5 @@
 import {
+  BadRequestException,
   ForbiddenException,
   Injectable,
   NotFoundException,
@@ -68,6 +69,24 @@ export class BranchesService {
     });
   }
 
+  async findOne(userId: string, branchId: string) {
+    const business =
+      await this.businessContextService.getCurrentBusiness(userId);
+
+    const branch = await this.prisma.branch.findFirst({
+      where: {
+        id: branchId,
+        businessId: business.id,
+      },
+    });
+
+    if (!branch) {
+      throw new NotFoundException('Branch not found.');
+    }
+
+    return branch;
+  }
+
   async create(userId: string, dto: CreateBranchDto) {
     const { business, membership } = await this.getManagementContext(userId);
 
@@ -106,10 +125,6 @@ export class BranchesService {
         },
       });
 
-      /*
-       * Automatically assign the branch creator
-       * to the new branch.
-       */
       await transaction.branchAssignment.create({
         data: {
           membershipId: membership.id,
@@ -136,6 +151,12 @@ export class BranchesService {
 
     if (!branch) {
       throw new NotFoundException('Branch not found.');
+    }
+
+    if (branch.isMainBranch && dto.isActive === false) {
+      throw new BadRequestException(
+        'Set another branch as the main branch before deactivating this branch.',
+      );
     }
 
     return this.prisma.$transaction(async (transaction) => {

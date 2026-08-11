@@ -42,4 +42,9 @@ export class BranchesController {
   ) {
     return this.branchesService.update(user.sub, id, dto);
   }
+
+  @Get(':id')
+  findOne(@CurrentUser() user: AccessTokenPayload, @Param('id') id: string) {
+    return this.branchesService.findOne(user.sub, id);
+  }
 }

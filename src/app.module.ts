@@ -13,6 +13,7 @@ import { CustomersModule } from './customers/customers.module';
 import { BusinessContextModule } from './business-context/business-context.module';
 
 import { BranchesModule } from './branches/branches.module';
+import { TeamModule } from './team/team.module';
 @Module({
   imports: [
     ConfigModule.forRoot({
@@ -30,6 +31,7 @@ import { BranchesModule } from './branches/branches.module';
     CustomersModule,
     BusinessContextModule,
     BranchesModule,
+    TeamModule,
   ],
 })
 export class AppModule {}

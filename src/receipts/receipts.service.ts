@@ -89,6 +89,7 @@ export class ReceiptsService {
           where: {
             id: dto.branchId,
             businessId: business.id,
+            isActive: true,
           },
           select: {
             id: true,
@@ -101,7 +102,7 @@ export class ReceiptsService {
 
         if (!branch) {
           throw new NotFoundException(
-            'The selected branch does not belong to this business.',
+            'The selected branch was not found or is inactive.',
           );
         }
 
@@ -116,21 +117,36 @@ export class ReceiptsService {
             userId,
             businessId: business.id,
             status: 'ACTIVE',
-            branchAssignments: {
-              some: {
-                branchId: branch.id,
-                isActive: true,
-              },
-            },
           },
           select: {
             id: true,
             role: true,
             status: true,
+
+            branchAssignments: {
+              where: {
+                branchId: branch.id,
+                isActive: true,
+              },
+
+              select: {
+                id: true,
+              },
+            },
           },
         });
 
         if (!membership) {
+          throw new ForbiddenException(
+            'You do not have an active membership in this business.',
+          );
+        }
+
+        const isOwner = membership.role === 'OWNER';
+
+        const hasBranchAccess = membership.branchAssignments.length > 0;
+
+        if (!isOwner && !hasBranchAccess) {
           throw new ForbiddenException(
             'You do not have permission to create receipts for this branch.',
           );

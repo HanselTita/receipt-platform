@@ -79,6 +79,7 @@ model User {
   authSessions     AuthSession[]
   createdReceipts  Receipt[]
   createdCustomers Customer[]
+  voidedReceipts   Receipt[]            @relation("VoidedReceipts")
 }
 
 model BusinessMembership {
@@ -188,10 +189,16 @@ model Receipt {
   paymentMethod PaymentMethod
   notes         String?
 
-  status    ReceiptStatus @default(ISSUED)
-  issuedAt  DateTime      @default(now())
-  createdAt DateTime      @default(now())
-  updatedAt DateTime      @updatedAt
+  status     ReceiptStatus @default(ISSUED)
+  voidedAt   DateTime?
+  voidReason String?
+
+  voidedByUserId String?
+  voidedByUser   User?   @relation("VoidedReceipts", fields: [voidedByUserId], references: [id])
+
+  issuedAt  DateTime @default(now())
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
 
   businessId String
   business   Business @relation(fields: [businessId], references: [id])
@@ -210,6 +217,7 @@ model Receipt {
   @@index([businessId])
   @@index([branchId])
   @@index([createdByUserId])
+  @@index([voidedByUserId])
   @@index([issuedAt])
   @@index([customerId])
 }

@@ -592,6 +592,13 @@ export class ReceiptsService {
             lastName: true,
           },
         },
+        voidedByUser: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
       },
     });
 
@@ -731,6 +738,132 @@ export class ReceiptsService {
       assignedBranchIds: membership.branchAssignments.map(
         (assignment) => assignment.branchId,
       ),
+    };
+  }
+
+  async voidReceipt(userId: string, receiptId: string, reason: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+      select: {
+        businessId: true,
+        role: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can void receipts.',
+      );
+    }
+
+    const normalizedReason = reason.trim();
+
+    if (!normalizedReason) {
+      throw new BadRequestException('A reason is required to void a receipt.');
+    }
+
+    const receipt = await this.prisma.receipt.findFirst({
+      where: {
+        id: receiptId,
+        businessId: membership.businessId,
+      },
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    if (!receipt) {
+      throw new NotFoundException('Receipt was not found.');
+    }
+
+    if (receipt.status === 'VOIDED') {
+      throw new BadRequestException('This receipt has already been voided.');
+    }
+
+    if (receipt.status === 'CORRECTED') {
+      throw new BadRequestException(
+        'A corrected receipt cannot be voided through this action.',
+      );
+    }
+
+    const updatedReceipt = await this.prisma.receipt.update({
+      where: {
+        id: receipt.id,
+      },
+      data: {
+        status: 'VOIDED',
+        voidedAt: new Date(),
+        voidReason: normalizedReason,
+        voidedByUserId: userId,
+      },
+      include: {
+        customer: {
+          select: {
+            id: true,
+            fullName: true,
+            phone: true,
+            email: true,
+          },
+        },
+        items: {
+          orderBy: {
+            createdAt: 'asc',
+          },
+        },
+        business: {
+          select: {
+            id: true,
+            businessName: true,
+            businessType: true,
+            defaultCurrency: true,
+            logo: true,
+            email: true,
+            phone: true,
+          },
+        },
+        branch: {
+          select: {
+            id: true,
+            branchName: true,
+            address: true,
+            city: true,
+            stateOrProvince: true,
+            country: true,
+            phone: true,
+            receiptPrefix: true,
+            isMainBranch: true,
+          },
+        },
+        createdByUser: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+        voidedByUser: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+      },
+    });
+
+    return {
+      message: 'Receipt voided successfully.',
+      receipt: updatedReceipt,
     };
   }
 }

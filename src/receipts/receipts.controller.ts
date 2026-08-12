@@ -4,6 +4,7 @@ import {
   Get,
   Param,
   Post,
+  Patch,
   Query,
   UseGuards,
 } from '@nestjs/common';
@@ -15,6 +16,7 @@ import type { AccessTokenPayload } from '../auth/types/access-token-payload.type
 import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { QueryReceiptsDto } from './dto/query-receipts.dto';
 import { ReceiptsService } from './receipts.service';
+import { VoidReceiptDto } from './dto/void-receipt.dto';
 
 @Controller('receipts')
 @UseGuards(JwtAuthGuard)
@@ -40,5 +42,14 @@ export class ReceiptsController {
     @Body() dto: CreateReceiptDto,
   ) {
     return this.receiptsService.create(user.sub, dto);
+  }
+
+  @Patch(':id/void')
+  voidReceipt(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('id') id: string,
+    @Body() dto: VoidReceiptDto,
+  ) {
+    return this.receiptsService.voidReceipt(user.sub, id, dto.reason);
   }
 }

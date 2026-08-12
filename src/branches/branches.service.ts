@@ -54,10 +54,58 @@ export class BranchesService {
     const business =
       await this.businessContextService.getCurrentBusiness(userId);
 
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        businessId: business.id,
+        status: 'ACTIVE',
+      },
+
+      select: {
+        id: true,
+        role: true,
+
+        branchAssignments: {
+          where: {
+            isActive: true,
+          },
+
+          select: {
+            branchId: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('Active business membership required.');
+    }
+
+    /*
+     * OWNER sees every branch.
+     *
+     * Staff sees only branches to which
+     * they have an active assignment.
+     */
+    const branchIds = membership.branchAssignments.map(
+      (assignment) => assignment.branchId,
+    );
+
     return this.prisma.branch.findMany({
       where: {
         businessId: business.id,
+
+        ...(membership.role !== 'OWNER'
+          ? {
+              id: {
+                in: branchIds,
+              },
+
+              isActive: true,
+            }
+          : {}),
       },
+
       orderBy: [
         {
           isMainBranch: 'desc',
@@ -73,10 +121,54 @@ export class BranchesService {
     const business =
       await this.businessContextService.getCurrentBusiness(userId);
 
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        businessId: business.id,
+        status: 'ACTIVE',
+      },
+
+      select: {
+        role: true,
+
+        branchAssignments: {
+          where: {
+            branchId,
+            isActive: true,
+          },
+
+          select: {
+            id: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException('Active business membership required.');
+    }
+
+    /*
+     * Staff may only read an actively
+     * assigned branch.
+     */
+    if (
+      membership.role !== 'OWNER' &&
+      membership.branchAssignments.length === 0
+    ) {
+      throw new NotFoundException('Branch not found.');
+    }
+
     const branch = await this.prisma.branch.findFirst({
       where: {
         id: branchId,
         businessId: business.id,
+
+        ...(membership.role !== 'OWNER'
+          ? {
+              isActive: true,
+            }
+          : {}),
       },
     });
 

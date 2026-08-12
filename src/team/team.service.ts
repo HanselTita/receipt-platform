@@ -109,9 +109,9 @@ export class TeamService {
   async addMember(userId: string, dto: AddTeamMemberDto) {
     const { business } = await this.getManagementContext(userId);
 
-    if (dto.role === 'OWNER') {
+    if (dto.role === 'OWNER' || dto.role === 'ADMIN') {
       throw new BadRequestException(
-        'Another owner cannot be added through this action.',
+        'Only MANAGER or CASHIER roles can be assigned to staff.',
       );
     }
 
@@ -446,14 +446,9 @@ export class TeamService {
 
   async createStaffAccount(currentUserId: string, dto: CreateStaffAccountDto) {
     const { business } = await this.getManagementContext(currentUserId);
-
-    /*
-     * OWNER can never be created through
-     * the normal staff-account workflow.
-     */
-    if (dto.role === 'OWNER') {
+    if (dto.role === 'OWNER' || dto.role === 'ADMIN') {
       throw new BadRequestException(
-        'The OWNER role cannot be assigned through staff account creation.',
+        'Staff accounts can only be created as MANAGER or CASHIER.',
       );
     }
 

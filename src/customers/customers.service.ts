@@ -1,11 +1,12 @@
 import {
   BadRequestException,
+  ForbiddenException,
   Injectable,
   NotFoundException,
-  ForbiddenException,
 } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
+
 import { CreateCustomerDto } from './dto/create-customer.dto';
 import { SearchCustomersDto } from './dto/search-customers.dto';
 import { UpdateCustomerDto } from './dto/update-customer.dto';
@@ -13,6 +14,7 @@ import { UpdateCustomerDto } from './dto/update-customer.dto';
 type FindOrCreateCustomerInput = {
   businessId: string;
   createdByUserId: string;
+  isOwner: boolean;
   fullName?: string | null;
   phone?: string | null;
   email?: string | null;
@@ -38,10 +40,43 @@ export class CustomersService {
     return normalized?.toLowerCase();
   }
 
+  private async getCustomerAccessContext(userId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        businessId: true,
+        role: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    return {
+      businessId: membership.businessId,
+
+      role: membership.role,
+
+      isOwner: membership.role === 'OWNER',
+    };
+  }
+
   async findOrCreateCustomer(
     {
       businessId,
       createdByUserId,
+      isOwner,
       fullName,
       phone,
       email,
@@ -58,6 +93,19 @@ export class CustomersService {
       return null;
     }
 
+    /*
+     * Owner may reuse any customer belonging
+     * to the business.
+     *
+     * Staff may only reuse customers that
+     * they created themselves.
+     */
+    const ownershipWhere = isOwner
+      ? {}
+      : {
+          createdByUserId,
+        };
+
     let existingCustomer: Awaited<
       ReturnType<typeof database.customer.findFirst>
     > = null;
@@ -66,7 +114,7 @@ export class CustomersService {
       existingCustomer = await database.customer.findFirst({
         where: {
           businessId,
-          createdByUserId,
+          ...ownershipWhere,
           phone: normalizedPhone,
         },
       });
@@ -76,7 +124,7 @@ export class CustomersService {
       existingCustomer = await database.customer.findFirst({
         where: {
           businessId,
-          createdByUserId,
+          ...ownershipWhere,
 
           email: {
             equals: normalizedEmail,
@@ -90,7 +138,7 @@ export class CustomersService {
       existingCustomer = await database.customer.findFirst({
         where: {
           businessId,
-          createdByUserId,
+          ...ownershipWhere,
 
           fullName: {
             equals: normalizedName,
@@ -99,6 +147,7 @@ export class CustomersService {
         },
       });
     }
+
     if (existingCustomer) {
       return existingCustomer;
     }
@@ -129,17 +178,17 @@ export class CustomersService {
       throw new BadRequestException('Provide at least one customer detail.');
     }
 
+    const ownershipWhere = access.isOwner
+      ? {}
+      : {
+          createdByUserId: userId,
+        };
+
     if (phone) {
       const existingByPhone = await this.prisma.customer.findFirst({
         where: {
           businessId,
-
-          ...(!access.isOwner
-            ? {
-                createdByUserId: userId,
-              }
-            : {}),
-
+          ...ownershipWhere,
           phone,
         },
       });
@@ -155,12 +204,7 @@ export class CustomersService {
       const existingByEmail = await this.prisma.customer.findFirst({
         where: {
           businessId,
-
-          ...(!access.isOwner
-            ? {
-                createdByUserId: userId,
-              }
-            : {}),
+          ...ownershipWhere,
 
           email: {
             equals: email,
@@ -190,14 +234,14 @@ export class CustomersService {
   async search(userId: string, query: SearchCustomersDto) {
     const access = await this.getCustomerAccessContext(userId);
 
-    const businessId = access.businessId;
     const page = query.page;
+
     const limit = query.limit;
 
     const search = query.q?.trim();
 
     const where = {
-      businessId,
+      businessId: access.businessId,
 
       ...(!access.isOwner
         ? {
@@ -233,8 +277,11 @@ export class CustomersService {
     const [customers, total] = await this.prisma.$transaction([
       this.prisma.customer.findMany({
         where,
+
         skip: (page - 1) * limit,
+
         take: limit,
+
         orderBy: {
           updatedAt: 'desc',
         },
@@ -249,12 +296,15 @@ export class CustomersService {
 
     return {
       data: customers,
+
       pagination: {
         page,
         limit,
         total,
         totalPages,
+
         hasNextPage: page < totalPages,
+
         hasPreviousPage: page > 1,
       },
     };
@@ -263,11 +313,11 @@ export class CustomersService {
   async findOne(userId: string, customerId: string) {
     const access = await this.getCustomerAccessContext(userId);
 
-    const businessId = access.businessId;
     const customer = await this.prisma.customer.findFirst({
       where: {
         id: customerId,
-        businessId,
+
+        businessId: access.businessId,
 
         ...(!access.isOwner
           ? {
@@ -311,8 +361,10 @@ export class CustomersService {
 
     const aggregates = await this.prisma.receipt.aggregate({
       where: {
-        businessId,
+        businessId: access.businessId,
+
         customerId,
+
         status: 'ISSUED',
 
         ...(!access.isOwner
@@ -334,10 +386,15 @@ export class CustomersService {
     return {
       customer: {
         id: customer.id,
+
         fullName: customer.fullName,
+
         phone: customer.phone,
+
         email: customer.email,
+
         createdAt: customer.createdAt,
+
         updatedAt: customer.updatedAt,
       },
 
@@ -354,10 +411,15 @@ export class CustomersService {
   async update(userId: string, customerId: string, dto: UpdateCustomerDto) {
     const access = await this.getCustomerAccessContext(userId);
 
-    const businessId = access.businessId;
-
+    /*
+     * This verifies that:
+     *
+     * OWNER -> customer belongs to business
+     *
+     * STAFF -> customer belongs to business
+     *          AND was created by this user
+     */
     await this.findOne(userId, customerId);
-    await this.findOne(businessId, customerId);
 
     const phone =
       dto.phone !== undefined
@@ -367,16 +429,18 @@ export class CustomersService {
     const email =
       dto.email !== undefined ? this.normalizeEmail(dto.email) : undefined;
 
+    const ownershipWhere = access.isOwner
+      ? {}
+      : {
+          createdByUserId: userId,
+        };
+
     if (phone) {
       const existingByPhone = await this.prisma.customer.findFirst({
         where: {
-          businessId,
+          businessId: access.businessId,
 
-          ...(!access.isOwner
-            ? {
-                createdByUserId: userId,
-              }
-            : {}),
+          ...ownershipWhere,
 
           phone,
 
@@ -396,13 +460,9 @@ export class CustomersService {
     if (email) {
       const existingByEmail = await this.prisma.customer.findFirst({
         where: {
-          businessId,
+          businessId: access.businessId,
 
-          ...(!access.isOwner
-            ? {
-                createdByUserId: userId,
-              }
-            : {}),
+          ...ownershipWhere,
 
           email: {
             equals: email,
@@ -426,6 +486,7 @@ export class CustomersService {
       where: {
         id: customerId,
       },
+
       data: {
         ...(dto.fullName !== undefined
           ? {
@@ -446,30 +507,5 @@ export class CustomersService {
           : {}),
       },
     });
-  }
-
-  private async getCustomerAccessContext(userId: string) {
-    const membership = await this.prisma.businessMembership.findFirst({
-      where: {
-        userId,
-        status: 'ACTIVE',
-      },
-
-      select: {
-        businessId: true,
-        role: true,
-      },
-    });
-
-    if (!membership) {
-      throw new ForbiddenException(
-        'You do not have an active business membership.',
-      );
-    }
-
-    return {
-      businessId: membership.businessId,
-      isOwner: membership.role === 'OWNER',
-    };
   }
 }

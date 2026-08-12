@@ -151,6 +151,7 @@ export class ReceiptsService {
           {
             businessId: business.id,
             createdByUserId: userId,
+            isOwner: membership.role === 'OWNER',
             fullName: dto.customerName,
             phone: dto.customerPhone,
             email: dto.customerEmail,

@@ -17,6 +17,7 @@ import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { QueryReceiptsDto } from './dto/query-receipts.dto';
 import { ReceiptsService } from './receipts.service';
 import { VoidReceiptDto } from './dto/void-receipt.dto';
+import { CorrectReceiptDto } from './dto/correct-receipt.dto';
 
 @Controller('receipts')
 @UseGuards(JwtAuthGuard)
@@ -51,5 +52,19 @@ export class ReceiptsController {
     @Body() dto: VoidReceiptDto,
   ) {
     return this.receiptsService.voidReceipt(user.sub, id, dto.reason);
+  }
+
+  @Patch(':id/correct')
+  correctReceipt(
+    @CurrentUser()
+    user: AccessTokenPayload,
+
+    @Param('id')
+    id: string,
+
+    @Body()
+    dto: CorrectReceiptDto,
+  ) {
+    return this.receiptsService.correctReceipt(user.sub, id, dto);
   }
 }

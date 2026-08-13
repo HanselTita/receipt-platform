@@ -12,6 +12,7 @@ import { CreateReceiptDto } from './dto/create-receipt.dto';
 import { ReceiptItemDto } from './dto/receipt-item.dto';
 import { QueryReceiptsDto } from './dto/query-receipts.dto';
 import { CustomersService } from '../customers/customers.service';
+import { CorrectReceiptDto } from './dto/correct-receipt.dto';
 
 type CalculatedItem = {
   description: string;
@@ -599,6 +600,32 @@ export class ReceiptsService {
             lastName: true,
           },
         },
+        correctedByUser: {
+          select: {
+            id: true,
+            firstName: true,
+            lastName: true,
+          },
+        },
+
+        originalReceipt: {
+          select: {
+            id: true,
+            receiptNumber: true,
+            status: true,
+          },
+        },
+
+        replacementReceipts: {
+          select: {
+            id: true,
+            receiptNumber: true,
+            status: true,
+          },
+          orderBy: {
+            issuedAt: 'desc',
+          },
+        },
       },
     });
 
@@ -865,5 +892,262 @@ export class ReceiptsService {
       message: 'Receipt voided successfully.',
       receipt: updatedReceipt,
     };
+  }
+
+  async correctReceipt(
+    userId: string,
+    receiptId: string,
+    dto: CorrectReceiptDto,
+  ) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+      select: {
+        businessId: true,
+        role: true,
+      },
+    });
+
+    if (!membership) {
+      throw new ForbiddenException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can correct receipts.',
+      );
+    }
+
+    const correctionReason = dto.reason.trim();
+
+    if (!correctionReason) {
+      throw new BadRequestException('A correction reason is required.');
+    }
+
+    const calculatedItems = dto.items.map((item, index) =>
+      this.calculateItem(item, index),
+    );
+
+    const subtotal = calculatedItems.reduce(
+      (total, item) => total.plus(item.lineSubtotal),
+      new Decimal(0),
+    );
+
+    const discountTotal = calculatedItems.reduce(
+      (total, item) => total.plus(item.discountAmount),
+      new Decimal(0),
+    );
+
+    const taxTotal = calculatedItems.reduce(
+      (total, item) => total.plus(item.taxAmount),
+      new Decimal(0),
+    );
+
+    const grandTotal = calculatedItems.reduce(
+      (total, item) => total.plus(item.lineTotal),
+      new Decimal(0),
+    );
+
+    return this.prisma.$transaction(
+      async (transaction) => {
+        const originalReceipt = await transaction.receipt.findFirst({
+          where: {
+            id: receiptId,
+            businessId: membership.businessId,
+          },
+
+          include: {
+            business: {
+              select: {
+                id: true,
+                defaultCurrency: true,
+              },
+            },
+
+            branch: {
+              select: {
+                id: true,
+                receiptPrefix: true,
+                nextReceiptNumber: true,
+                isActive: true,
+              },
+            },
+          },
+        });
+
+        if (!originalReceipt) {
+          throw new NotFoundException('Receipt was not found.');
+        }
+
+        if (originalReceipt.status === 'VOIDED') {
+          throw new BadRequestException(
+            'A voided receipt cannot be corrected.',
+          );
+        }
+
+        if (originalReceipt.status === 'CORRECTED') {
+          throw new BadRequestException(
+            'This receipt has already been corrected.',
+          );
+        }
+
+        if (!originalReceipt.branch.isActive) {
+          throw new BadRequestException(
+            'The original receipt branch is inactive.',
+          );
+        }
+
+        const customer = await this.customersService.findOrCreateCustomer(
+          {
+            businessId: membership.businessId,
+
+            createdByUserId: userId,
+
+            isOwner: true,
+
+            fullName: dto.customerName,
+
+            phone: dto.customerPhone,
+
+            email: dto.customerEmail,
+          },
+          transaction,
+        );
+
+        const updatedBranch = await transaction.branch.update({
+          where: {
+            id: originalReceipt.branchId,
+          },
+
+          data: {
+            nextReceiptNumber: {
+              increment: 1,
+            },
+          },
+
+          select: {
+            receiptPrefix: true,
+            nextReceiptNumber: true,
+          },
+        });
+
+        const issuedSequence = updatedBranch.nextReceiptNumber - 1;
+
+        const receiptNumber = this.formatReceiptNumber(
+          updatedBranch.receiptPrefix,
+          issuedSequence,
+        );
+
+        const verificationCode = this.generateVerificationCode();
+
+        const replacementReceipt = await transaction.receipt.create({
+          data: {
+            receiptNumber,
+            verificationCode,
+
+            customerId: customer?.id ?? null,
+
+            customerName: dto.customerName?.trim() || null,
+
+            customerPhone: dto.customerPhone?.trim() || null,
+
+            customerEmail: dto.customerEmail?.trim().toLowerCase() || null,
+
+            currency: originalReceipt.business.defaultCurrency,
+
+            subtotal: subtotal.toFixed(4),
+
+            discountTotal: discountTotal.toFixed(4),
+
+            taxTotal: taxTotal.toFixed(4),
+
+            grandTotal: grandTotal.toFixed(4),
+
+            paymentMethod: dto.paymentMethod,
+
+            notes: dto.notes?.trim() || null,
+
+            businessId: membership.businessId,
+
+            branchId: originalReceipt.branchId,
+
+            createdByUserId: userId,
+
+            originalReceiptId: originalReceipt.id,
+            items: {
+              create: calculatedItems.map((item) => ({
+                description: item.description,
+                quantity: item.quantity.toFixed(4),
+                unitPrice: item.unitPrice.toFixed(4),
+                discountAmount: item.discountAmount.toFixed(4),
+                taxRate: item.taxRate.toFixed(4),
+                taxAmount: item.taxAmount.toFixed(4),
+                lineSubtotal: item.lineSubtotal.toFixed(4),
+                lineTotal: item.lineTotal.toFixed(4),
+              })),
+            },
+          },
+
+          include: {
+            customer: true,
+            items: true,
+            branch: true,
+
+            createdByUser: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+
+            originalReceipt: {
+              select: {
+                id: true,
+                receiptNumber: true,
+              },
+            },
+          },
+        });
+
+        await transaction.receipt.update({
+          where: {
+            id: originalReceipt.id,
+          },
+
+          data: {
+            status: 'CORRECTED',
+
+            correctedAt: new Date(),
+
+            correctionReason,
+
+            correctedByUserId: userId,
+          },
+        });
+
+        return {
+          message: 'Receipt corrected successfully.',
+
+          originalReceipt: {
+            id: originalReceipt.id,
+
+            receiptNumber: originalReceipt.receiptNumber,
+
+            status: 'CORRECTED' as const,
+          },
+
+          replacementReceipt,
+        };
+      },
+      {
+        maxWait: 10_000,
+        timeout: 20_000,
+      },
+    );
   }
 }

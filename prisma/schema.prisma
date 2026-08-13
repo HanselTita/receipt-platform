@@ -75,11 +75,12 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships      BusinessMembership[]
-  authSessions     AuthSession[]
-  createdReceipts  Receipt[]
-  createdCustomers Customer[]
-  voidedReceipts   Receipt[]            @relation("VoidedReceipts")
+  memberships       BusinessMembership[]
+  authSessions      AuthSession[]
+  createdReceipts   Receipt[]
+  createdCustomers  Customer[]
+  voidedReceipts    Receipt[]            @relation("VoidedReceipts")
+  correctedReceipts Receipt[]            @relation("CorrectedByUser")
 }
 
 model BusinessMembership {
@@ -189,12 +190,24 @@ model Receipt {
   paymentMethod PaymentMethod
   notes         String?
 
-  status     ReceiptStatus @default(ISSUED)
+  status ReceiptStatus @default(ISSUED)
+
   voidedAt   DateTime?
   voidReason String?
 
   voidedByUserId String?
   voidedByUser   User?   @relation("VoidedReceipts", fields: [voidedByUserId], references: [id])
+
+  correctedAt      DateTime?
+  correctionReason String?
+
+  correctedByUserId String?
+  correctedByUser   User?   @relation("CorrectedByUser", fields: [correctedByUserId], references: [id])
+
+  originalReceiptId String?
+  originalReceipt   Receipt? @relation("ReceiptCorrections", fields: [originalReceiptId], references: [id])
+
+  replacementReceipts Receipt[] @relation("ReceiptCorrections")
 
   issuedAt  DateTime @default(now())
   createdAt DateTime @default(now())
@@ -218,6 +231,8 @@ model Receipt {
   @@index([branchId])
   @@index([createdByUserId])
   @@index([voidedByUserId])
+  @@index([correctedByUserId])
+  @@index([originalReceiptId])
   @@index([issuedAt])
   @@index([customerId])
 }

@@ -54,4 +54,9 @@ export class UpdateBusinessSettingsDto {
   @Min(0)
   @Max(100)
   taxRate?: number;
+
+  @IsOptional()
+  @IsString()
+  @MaxLength(500)
+  receiptFooter?: string;
 }

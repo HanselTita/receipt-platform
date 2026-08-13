@@ -165,6 +165,7 @@ export class BusinessesService {
         businessName: true,
         businessType: true,
         logo: true,
+        receiptFooter: true,
         email: true,
         phone: true,
         defaultCurrency: true,
@@ -198,6 +199,7 @@ export class BusinessesService {
         id: true,
         taxEnabled: true,
         taxRate: true,
+        receiptFooter: true,
       },
     });
 
@@ -245,6 +247,12 @@ export class BusinessesService {
         ...(dto.phone !== undefined
           ? {
               phone: dto.phone.trim() || null,
+            }
+          : {}),
+
+        ...(dto.receiptFooter !== undefined
+          ? {
+              receiptFooter: dto.receiptFooter.trim() || null,
             }
           : {}),
 

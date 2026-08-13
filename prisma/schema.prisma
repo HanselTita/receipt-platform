@@ -15,6 +15,7 @@ model Business {
   businessType    String
   defaultCurrency String
   logo            String?
+  receiptFooter   String?
   email           String?
   phone           String?
   taxEnabled      Boolean  @default(false)

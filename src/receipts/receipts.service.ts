@@ -565,6 +565,7 @@ export class ReceiptsService {
             businessType: true,
             defaultCurrency: true,
             logo: true,
+            receiptFooter: true,
             email: true,
             phone: true,
             taxEnabled: true,

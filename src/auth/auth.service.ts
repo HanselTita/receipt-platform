@@ -15,6 +15,10 @@ import { RegisterDto } from './dto/register.dto';
 import type { AccessTokenPayload } from './types/access-token-payload.type';
 import type { RefreshTokenPayload } from './types/refresh-token-payload.type';
 import { hashToken } from './utils/token-hash.util';
+import { PrismaService } from '../prisma/prisma.service';
+
+import { ChangePasswordDto } from './dto/change-password.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
 
 @Injectable()
 export class AuthService {
@@ -23,6 +27,7 @@ export class AuthService {
     private readonly authSessionsService: AuthSessionsService,
     private readonly jwtService: JwtService,
     private readonly configService: ConfigService,
+    private readonly prisma: PrismaService,
   ) {}
 
   async register(registerDto: RegisterDto) {
@@ -126,6 +131,37 @@ export class AuthService {
       throw new UnauthorizedException('The authenticated user is unavailable.');
     }
 
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      include: {
+        business: {
+          select: {
+            id: true,
+            businessName: true,
+          },
+        },
+
+        branchAssignments: {
+          where: {
+            isActive: true,
+          },
+
+          include: {
+            branch: {
+              select: {
+                id: true,
+                branchName: true,
+              },
+            },
+          },
+        },
+      },
+    });
+
     return {
       id: user.id,
       firstName: user.firstName,
@@ -135,9 +171,28 @@ export class AuthService {
       isActive: user.isActive,
       createdAt: user.createdAt,
       updatedAt: user.updatedAt,
+
+      workspace: membership
+        ? {
+            role: membership.role,
+
+            business: {
+              id: membership.business.id,
+
+              businessName: membership.business.businessName,
+            },
+
+            assignedBranches: membership.branchAssignments.map(
+              (assignment) => ({
+                id: assignment.branch.id,
+
+                branchName: assignment.branch.branchName,
+              }),
+            ),
+          }
+        : null,
     };
   }
-
   private getAccessTokenExpiresIn(): number {
     return Number(
       this.configService.get<string>('JWT_ACCESS_EXPIRES_IN_SECONDS', '900'),
@@ -286,6 +341,124 @@ export class AuthService {
 
     return {
       message: 'Logged out successfully.',
+    };
+  }
+
+  async updateProfile(userId: string, dto: UpdateProfileDto) {
+    const currentUser = await this.usersService.findById(userId);
+
+    if (!currentUser || !currentUser.isActive) {
+      throw new UnauthorizedException('The authenticated user is unavailable.');
+    }
+
+    let normalizedEmail: string | undefined;
+
+    if (dto.email !== undefined) {
+      const email = dto.email.trim().toLowerCase();
+
+      const existingUser = await this.usersService.findByEmail(email);
+
+      if (existingUser && existingUser.id !== userId) {
+        throw new ConflictException(
+          'An account with this email address already exists.',
+        );
+      }
+
+      normalizedEmail = email;
+    }
+
+    const user = await this.usersService.updateProfile(userId, {
+      ...(dto.firstName !== undefined
+        ? {
+            firstName: dto.firstName.trim(),
+          }
+        : {}),
+
+      ...(dto.lastName !== undefined
+        ? {
+            lastName: dto.lastName.trim(),
+          }
+        : {}),
+
+      ...(normalizedEmail !== undefined
+        ? {
+            email: normalizedEmail,
+          }
+        : {}),
+
+      ...(dto.phone !== undefined
+        ? {
+            phone: dto.phone.trim() || null,
+          }
+        : {}),
+    });
+
+    return {
+      message: 'Profile updated successfully.',
+
+      user: {
+        id: user.id,
+        firstName: user.firstName,
+        lastName: user.lastName,
+        email: user.email,
+        phone: user.phone,
+        isActive: user.isActive,
+        createdAt: user.createdAt,
+        updatedAt: user.updatedAt,
+      },
+    };
+  }
+
+  async changePassword(userId: string, dto: ChangePasswordDto) {
+    const user = await this.usersService.findById(userId);
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('The authenticated user is unavailable.');
+    }
+
+    const currentPasswordMatches = await argon2.verify(
+      user.passwordHash,
+      dto.currentPassword,
+    );
+
+    if (!currentPasswordMatches) {
+      throw new UnauthorizedException('Current password is incorrect.');
+    }
+
+    const samePassword = await argon2.verify(
+      user.passwordHash,
+      dto.newPassword,
+    );
+
+    if (samePassword) {
+      throw new ConflictException(
+        'New password must be different from your current password.',
+      );
+    }
+
+    const passwordHash = await argon2.hash(dto.newPassword);
+
+    await this.usersService.updatePassword(userId, passwordHash);
+
+    await this.authSessionsService.revokeAllForUser(userId);
+
+    return {
+      message: 'Password changed successfully. Please log in again.',
+    };
+  }
+
+  async logoutAll(userId: string) {
+    const user = await this.usersService.findById(userId);
+
+    if (!user || !user.isActive) {
+      throw new UnauthorizedException('The authenticated user is unavailable.');
+    }
+
+    const result = await this.authSessionsService.revokeAllForUser(userId);
+
+    return {
+      message: 'Logged out from all devices successfully.',
+      revokedSessions: result.count,
     };
   }
 }

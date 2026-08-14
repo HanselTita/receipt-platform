@@ -6,6 +6,7 @@ import {
   HttpStatus,
   Post,
   UseGuards,
+  Patch,
 } from '@nestjs/common';
 
 import { CurrentUser } from './decorators/current-user.decorator';
@@ -17,6 +18,8 @@ import type { AccessTokenPayload } from './types/access-token-payload.type';
 
 import { LogoutDto } from './dto/logout.dto';
 import { RefreshTokenDto } from './dto/refresh-token.dto';
+import { UpdateProfileDto } from './dto/update-profile.dto';
+import { ChangePasswordDto } from './dto/change-password.dto';
 
 @Controller('auth')
 export class AuthController {
@@ -50,5 +53,31 @@ export class AuthController {
   @HttpCode(HttpStatus.OK)
   logout(@Body() logoutDto: LogoutDto) {
     return this.authService.logout(logoutDto.refreshToken);
+  }
+
+  @Patch('profile')
+  @UseGuards(JwtAuthGuard)
+  updateProfile(
+    @CurrentUser() user: AccessTokenPayload,
+    @Body() dto: UpdateProfileDto,
+  ) {
+    return this.authService.updateProfile(user.sub, dto);
+  }
+
+  @Post('change-password')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  changePassword(
+    @CurrentUser() user: AccessTokenPayload,
+    @Body() dto: ChangePasswordDto,
+  ) {
+    return this.authService.changePassword(user.sub, dto);
+  }
+
+  @Post('logout-all')
+  @UseGuards(JwtAuthGuard)
+  @HttpCode(HttpStatus.OK)
+  logoutAll(@CurrentUser() user: AccessTokenPayload) {
+    return this.authService.logoutAll(user.sub);
   }
 }

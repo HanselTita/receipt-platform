@@ -1,4 +1,8 @@
-import { Injectable } from '@nestjs/common';
+import {
+  ConflictException,
+  Injectable,
+  UnauthorizedException,
+} from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
 
@@ -31,6 +35,34 @@ export class UsersService {
   }) {
     return this.prisma.user.create({
       data,
+    });
+  }
+
+  async updateProfile(
+    userId: string,
+    data: {
+      firstName?: string;
+      lastName?: string;
+      email?: string;
+      phone?: string | null;
+    },
+  ) {
+    return this.prisma.user.update({
+      where: {
+        id: userId,
+      },
+      data,
+    });
+  }
+
+  async updatePassword(userId: string, passwordHash: string) {
+    return this.prisma.user.update({
+      where: {
+        id: userId,
+      },
+      data: {
+        passwordHash,
+      },
     });
   }
 }

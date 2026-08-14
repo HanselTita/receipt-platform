@@ -274,8 +274,11 @@ export class ReceiptsService {
                 businessType: true,
                 defaultCurrency: true,
                 logo: true,
+                receiptFooter: true,
                 email: true,
                 phone: true,
+                taxEnabled: true,
+                taxRate: true,
               },
             },
 
@@ -461,6 +464,7 @@ export class ReceiptsService {
             select: {
               id: true,
               businessName: true,
+              receiptFooter: true,
             },
           },
 
@@ -740,6 +744,7 @@ export class ReceiptsService {
           select: {
             id: true,
             businessName: true,
+            receiptFooter: true,
           },
         },
         branchAssignments: {
@@ -857,6 +862,7 @@ export class ReceiptsService {
             logo: true,
             email: true,
             phone: true,
+            receiptFooter: true,
           },
         },
         branch: {
@@ -966,6 +972,7 @@ export class ReceiptsService {
               select: {
                 id: true,
                 defaultCurrency: true,
+                receiptFooter: true,
               },
             },
 

@@ -303,4 +303,48 @@ export class BusinessesService {
       },
     };
   }
+
+  async updateLogo(userId: string, logoPath: string) {
+    const membership = await this.getOwnerContext(userId);
+
+    const business = await this.prisma.business.update({
+      where: {
+        id: membership.businessId,
+      },
+      data: {
+        logo: logoPath,
+      },
+      select: {
+        id: true,
+        logo: true,
+      },
+    });
+
+    return {
+      message: 'Business logo updated successfully.',
+      business,
+    };
+  }
+
+  async removeLogo(userId: string) {
+    const membership = await this.getOwnerContext(userId);
+
+    const business = await this.prisma.business.update({
+      where: {
+        id: membership.businessId,
+      },
+      data: {
+        logo: null,
+      },
+      select: {
+        id: true,
+        logo: true,
+      },
+    });
+
+    return {
+      message: 'Business logo removed successfully.',
+      business,
+    };
+  }
 }

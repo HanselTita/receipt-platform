@@ -15,6 +15,7 @@ import { BusinessContextModule } from './business-context/business-context.modul
 
 import { BranchesModule } from './branches/branches.module';
 import { TeamModule } from './team/team.module';
+import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 
 @Module({
   imports: [

@@ -13,12 +13,14 @@ import { UpdateTeamMemberDto } from './dto/update-team-member.dto';
 
 import * as argon2 from 'argon2';
 import { CreateStaffAccountDto } from './dto/create-staff-account.dto';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 @Injectable()
 export class TeamService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly businessContextService: BusinessContextService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   private async getManagementContext(userId: string) {

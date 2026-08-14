@@ -7,10 +7,14 @@ import {
 import { PrismaService } from '../prisma/prisma.service';
 import { CreateBusinessDto } from './dto/create-business.dto';
 import { UpdateBusinessSettingsDto } from './dto/update-business-settings.dto';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 @Injectable()
 export class BusinessesService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subscriptionsService: SubscriptionsService,
+  ) {}
 
   private async getOwnerContext(userId: string) {
     const membership = await this.prisma.businessMembership.findFirst({
@@ -243,7 +247,11 @@ export class BusinessesService {
 
   async updateSettings(userId: string, dto: UpdateBusinessSettingsDto) {
     const membership = await this.getOwnerContext(userId);
-
+    if (dto.receiptFooter !== undefined) {
+      await this.subscriptionsService.assertCustomBrandingAllowed(
+        membership.businessId,
+      );
+    }
     const currentBusiness = await this.prisma.business.findUnique({
       where: {
         id: membership.businessId,
@@ -388,7 +396,9 @@ export class BusinessesService {
 
   async updateLogo(userId: string, logoPath: string) {
     const membership = await this.getOwnerContext(userId);
-
+    await this.subscriptionsService.assertCustomBrandingAllowed(
+      membership.businessId,
+    );
     const business = await this.prisma.business.update({
       where: {
         id: membership.businessId,
@@ -412,7 +422,9 @@ export class BusinessesService {
 
   async removeLogo(userId: string) {
     const membership = await this.getOwnerContext(userId);
-
+    await this.subscriptionsService.assertCustomBrandingAllowed(
+      membership.businessId,
+    );
     const business = await this.prisma.business.update({
       where: {
         id: membership.businessId,

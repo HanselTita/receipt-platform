@@ -11,6 +11,7 @@ import { PrismaService } from '../prisma/prisma.service';
 
 import { DashboardAnalyticsQueryDto } from './dto/dashboard-analytics-query.dto';
 import { AnalyticsPeriod } from './enums/analytics-period.enum';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 type AnalyticsDateRange = {
   dateFrom: Date;
@@ -29,7 +30,10 @@ type AnalyticsComparison = {
 
 @Injectable()
 export class DashboardService {
-  constructor(private readonly prisma: PrismaService) {}
+  constructor(
+    private readonly prisma: PrismaService,
+    private readonly subscriptionsService: SubscriptionsService,
+  ) {}
 
   async getDashboard(userId: string) {
     /*
@@ -428,6 +432,9 @@ export class DashboardService {
         'Analytics are available only to the business owner.',
       );
     }
+    await this.subscriptionsService.assertAnalyticsAllowed(
+      membership.businessId,
+    );
 
     const branchIds = membership.branchAssignments.map(
       (assignment) => assignment.branchId,

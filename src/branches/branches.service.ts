@@ -10,18 +10,20 @@ import { PrismaService } from '../prisma/prisma.service';
 
 import { CreateBranchDto } from './dto/create-branch.dto';
 import { UpdateBranchDto } from './dto/update-branch.dto';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 @Injectable()
 export class BranchesService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly businessContextService: BusinessContextService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
 
   private async getManagementContext(userId: string) {
     const business =
       await this.businessContextService.getCurrentBusiness(userId);
-
+    await this.subscriptionsService.assertCanCreateBranch(business.id);
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,

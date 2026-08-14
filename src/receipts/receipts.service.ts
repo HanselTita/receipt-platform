@@ -13,6 +13,7 @@ import { ReceiptItemDto } from './dto/receipt-item.dto';
 import { QueryReceiptsDto } from './dto/query-receipts.dto';
 import { CustomersService } from '../customers/customers.service';
 import { CorrectReceiptDto } from './dto/correct-receipt.dto';
+import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 type CalculatedItem = {
   description: string;
@@ -26,12 +27,13 @@ type CalculatedItem = {
 };
 
 @Injectable()
+@Injectable()
 export class ReceiptsService {
   constructor(
     private readonly prisma: PrismaService,
     private readonly customersService: CustomersService,
+    private readonly subscriptionsService: SubscriptionsService,
   ) {}
-
   async create(userId: string, dto: CreateReceiptDto) {
     /*
      * Calculate all item and receipt totals before opening the
@@ -152,7 +154,14 @@ export class ReceiptsService {
             'You do not have permission to create receipts for this branch.',
           );
         }
-
+        /*
+         * 4. Enforce the business subscription's monthly
+         * receipt allowance.
+         *
+         * This runs only after we have verified that the authenticated
+         * user actually belongs to the requested business.
+         */
+        await this.subscriptionsService.assertCanIssueReceipt(business.id);
         /*
          * 4. Resolve the optional customer.
          *
@@ -934,7 +943,13 @@ export class ReceiptsService {
     if (!correctionReason) {
       throw new BadRequestException('A correction reason is required.');
     }
-
+    /*
+     * A correction creates a new replacement receipt, so it also
+     * consumes the monthly receipt allowance.
+     */
+    await this.subscriptionsService.assertCanIssueReceipt(
+      membership.businessId,
+    );
     const calculatedItems = dto.items.map((item, index) =>
       this.calculateItem(item, index),
     );

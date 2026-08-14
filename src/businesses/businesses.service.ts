@@ -55,18 +55,33 @@ export class BusinessesService {
     return this.prisma.$transaction(async (transaction) => {
       const business = await transaction.business.create({
         data: {
-          businessName: createBusinessDto.businessName,
-          businessType: createBusinessDto.businessType,
-          defaultCurrency: createBusinessDto.defaultCurrency,
+          businessName: createBusinessDto.businessName.trim(),
+          businessType: createBusinessDto.businessType.trim(),
+          defaultCurrency: createBusinessDto.defaultCurrency
+            .trim()
+            .toUpperCase(),
+
           taxEnabled,
+
           taxRate: taxEnabled ? createBusinessDto.taxRate : null,
+
+          subscription: {
+            create: {
+              plan: 'FREE',
+              status: 'ACTIVE',
+            },
+          },
+        },
+
+        include: {
+          subscription: true,
         },
       });
 
       const mainBranch = await transaction.branch.create({
         data: {
           branchName: 'Main Branch',
-          country: createBusinessDto.country,
+          country: createBusinessDto.country.trim(),
           receiptPrefix: 'RCP',
           nextReceiptNumber: 1,
           isMainBranch: true,
@@ -93,8 +108,11 @@ export class BusinessesService {
 
       return {
         message: 'Business created successfully.',
+
         business,
+
         mainBranch,
+
         membership: {
           id: ownerMembership.id,
           role: ownerMembership.role,
@@ -110,9 +128,11 @@ export class BusinessesService {
         userId,
         status: 'ACTIVE',
       },
+
       orderBy: {
         createdAt: 'asc',
       },
+
       include: {
         business: {
           include: {
@@ -126,12 +146,16 @@ export class BusinessesService {
                 },
               ],
             },
+
+            subscription: true,
           },
         },
+
         branchAssignments: {
           where: {
             isActive: true,
           },
+
           include: {
             branch: true,
           },
@@ -145,7 +169,9 @@ export class BusinessesService {
         role: membership.role,
         status: membership.status,
         joinedAt: membership.joinedAt,
+
         business: membership.business,
+
         assignedBranches: membership.branchAssignments.map(
           (assignment) => assignment.branch,
         ),
@@ -160,6 +186,7 @@ export class BusinessesService {
       where: {
         id: membership.businessId,
       },
+
       select: {
         id: true,
         businessName: true,
@@ -173,6 +200,16 @@ export class BusinessesService {
         taxRate: true,
         createdAt: true,
         updatedAt: true,
+
+        subscription: {
+          select: {
+            id: true,
+            plan: true,
+            status: true,
+            startsAt: true,
+            endsAt: true,
+          },
+        },
       },
     });
 
@@ -184,6 +221,22 @@ export class BusinessesService {
       business: {
         ...business,
         taxRate: business.taxRate?.toString() ?? null,
+
+        subscription: business.subscription
+          ? {
+              id: business.subscription.id,
+              plan: business.subscription.plan,
+              status: business.subscription.status,
+              startsAt: business.subscription.startsAt,
+              endsAt: business.subscription.endsAt,
+            }
+          : {
+              id: null,
+              plan: 'FREE',
+              status: 'ACTIVE',
+              startsAt: null,
+              endsAt: null,
+            },
       },
     };
   }
@@ -195,6 +248,7 @@ export class BusinessesService {
       where: {
         id: membership.businessId,
       },
+
       select: {
         id: true,
         taxEnabled: true,
@@ -225,6 +279,7 @@ export class BusinessesService {
       where: {
         id: membership.businessId,
       },
+
       data: {
         ...(dto.businessName !== undefined
           ? {
@@ -284,6 +339,7 @@ export class BusinessesService {
         businessName: true,
         businessType: true,
         logo: true,
+        receiptFooter: true,
         email: true,
         phone: true,
         defaultCurrency: true,
@@ -291,6 +347,16 @@ export class BusinessesService {
         taxRate: true,
         createdAt: true,
         updatedAt: true,
+
+        subscription: {
+          select: {
+            id: true,
+            plan: true,
+            status: true,
+            startsAt: true,
+            endsAt: true,
+          },
+        },
       },
     });
 
@@ -300,6 +366,22 @@ export class BusinessesService {
       business: {
         ...business,
         taxRate: business.taxRate?.toString() ?? null,
+
+        subscription: business.subscription
+          ? {
+              id: business.subscription.id,
+              plan: business.subscription.plan,
+              status: business.subscription.status,
+              startsAt: business.subscription.startsAt,
+              endsAt: business.subscription.endsAt,
+            }
+          : {
+              id: null,
+              plan: 'FREE',
+              status: 'ACTIVE',
+              startsAt: null,
+              endsAt: null,
+            },
       },
     };
   }
@@ -311,9 +393,11 @@ export class BusinessesService {
       where: {
         id: membership.businessId,
       },
+
       data: {
         logo: logoPath,
       },
+
       select: {
         id: true,
         logo: true,
@@ -333,9 +417,11 @@ export class BusinessesService {
       where: {
         id: membership.businessId,
       },
+
       data: {
         logo: null,
       },
+
       select: {
         id: true,
         logo: true,

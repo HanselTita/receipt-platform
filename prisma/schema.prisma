@@ -23,10 +23,11 @@ model Business {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  branches    Branch[]
-  memberships BusinessMembership[]
-  receipts    Receipt[]
-  customers   Customer[]
+  branches     Branch[]
+  memberships  BusinessMembership[]
+  receipts     Receipt[]
+  customers    Customer[]
+  subscription Subscription?
 }
 
 model Branch {
@@ -254,4 +255,32 @@ model ReceiptItem {
   receipt   Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
   @@index([receiptId])
+}
+
+//Subscriptions/
+enum SubscriptionPlan {
+  FREE
+  STARTER
+  BUSINESS
+  PRO
+}
+
+enum SubscriptionStatus {
+  ACTIVE
+  PAST_DUE
+  CANCELLED
+  EXPIRED
+}
+
+model Subscription {
+  id        String             @id @default(uuid())
+  plan      SubscriptionPlan   @default(FREE)
+  status    SubscriptionStatus @default(ACTIVE)
+  startsAt  DateTime           @default(now())
+  endsAt    DateTime?
+  createdAt DateTime           @default(now())
+  updatedAt DateTime           @updatedAt
+
+  businessId String   @unique
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 }

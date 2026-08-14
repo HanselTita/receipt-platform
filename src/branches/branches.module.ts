@@ -6,9 +6,15 @@ import { PrismaModule } from '../prisma/prisma.module';
 
 import { BranchesController } from './branches.controller';
 import { BranchesService } from './branches.service';
+import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
 
 @Module({
-  imports: [PrismaModule, AuthModule, BusinessContextModule],
+  imports: [
+    PrismaModule,
+    AuthModule,
+    SubscriptionsModule,
+    BusinessContextModule,
+  ],
   controllers: [BranchesController],
   providers: [BranchesService],
   exports: [BranchesService],

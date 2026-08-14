@@ -5,10 +5,12 @@ import {
   NotFoundException,
 } from '@nestjs/common';
 
+import type { Prisma } from '../../generated/prisma/client';
+
 import { PrismaService } from '../prisma/prisma.service';
+
 import { DashboardAnalyticsQueryDto } from './dto/dashboard-analytics-query.dto';
 import { AnalyticsPeriod } from './enums/analytics-period.enum';
-import type { Prisma } from '../../generated/prisma/client';
 
 type AnalyticsDateRange = {
   dateFrom: Date;
@@ -62,9 +64,11 @@ export class DashboardService {
         userId,
         status: 'ACTIVE',
       },
+
       orderBy: {
         createdAt: 'asc',
       },
+
       include: {
         business: {
           include: {
@@ -72,11 +76,15 @@ export class DashboardService {
               where: {
                 isMainBranch: true,
               },
+
               orderBy: {
                 createdAt: 'asc',
               },
+
               take: 1,
             },
+
+            subscription: true,
 
             _count: {
               select: {
@@ -94,6 +102,7 @@ export class DashboardService {
           where: {
             isActive: true,
           },
+
           include: {
             branch: true,
           },
@@ -108,32 +117,45 @@ export class DashboardService {
     if (!membership) {
       return {
         user,
+
         hasBusiness: false,
+
+        membership: null,
+
         business: null,
+
         branch: null,
+
         assignedBranches: [],
+
         stats: {
           todayReceipts: 0,
           todaySales: '0',
           totalReceipts: 0,
           employees: 0,
         },
+
         recentReceipts: [],
+
         subscription: {
+          id: null,
           plan: 'FREE',
+          status: 'ACTIVE',
+          startsAt: null,
+          endsAt: null,
         },
       };
     }
 
     const business = membership.business;
+
     const mainBranch = business.branches[0] ?? null;
 
     /*
      * 4. Determine the start of today and tomorrow.
      *
      * This currently uses the backend server's local date.
-     * Later, we will store a timezone for each business and
-     * calculate these boundaries using that timezone.
+     * Later, we can store a timezone per business.
      */
     const startOfToday = new Date();
 
@@ -144,20 +166,25 @@ export class DashboardService {
     startOfTomorrow.setDate(startOfTomorrow.getDate() + 1);
 
     /*
-     * 5. Only include branches assigned to this user.
+     * Assigned branches are returned for UI/workspace context.
      *
-     * This is important for managers and cashiers who might
-     * have access to only one branch.
+     * Staff receipt visibility is deliberately still restricted
+     * by createdByUserId, matching your current permission rule:
+     *
+     * OWNER -> all business receipts
+     * STAFF -> only receipts issued by that staff member
      */
     const assignedBranchIds = membership.branchAssignments.map(
       (assignment) => assignment.branchId,
     );
 
     /*
-     * An active membership without a branch assignment should
-     * not expose receipt statistics.
+     * Keep this variable available for future branch-specific
+     * subscription/access rules.
      */
-    const accessibleReceiptWhere =
+    void assignedBranchIds;
+
+    const accessibleReceiptWhere: Prisma.ReceiptWhereInput =
       membership.role === 'OWNER'
         ? {
             businessId: business.id,
@@ -168,7 +195,7 @@ export class DashboardService {
           };
 
     /*
-     * 6. Run independent dashboard queries together.
+     * 5. Run independent dashboard queries together.
      */
     const [
       todayReceipts,
@@ -182,6 +209,7 @@ export class DashboardService {
       this.prisma.receipt.count({
         where: {
           ...accessibleReceiptWhere,
+
           issuedAt: {
             gte: startOfToday,
             lt: startOfTomorrow,
@@ -192,18 +220,21 @@ export class DashboardService {
       /*
        * Sum of today's issued receipt totals.
        *
-       * Voided receipts are excluded because they should no
-       * longer count as actual sales.
+       * Voided receipts remain in history but do not count as
+       * actual revenue.
        */
       this.prisma.receipt.aggregate({
         where: {
           ...accessibleReceiptWhere,
+
           status: 'ISSUED',
+
           issuedAt: {
             gte: startOfToday,
             lt: startOfTomorrow,
           },
         },
+
         _sum: {
           grandTotal: true,
         },
@@ -217,14 +248,17 @@ export class DashboardService {
       }),
 
       /*
-       * Five most recent receipts for the dashboard.
+       * Five most recent receipts.
        */
       this.prisma.receipt.findMany({
         where: accessibleReceiptWhere,
+
         orderBy: {
           issuedAt: 'desc',
         },
+
         take: 5,
+
         select: {
           id: true,
           receiptNumber: true,
@@ -234,6 +268,7 @@ export class DashboardService {
           paymentMethod: true,
           status: true,
           issuedAt: true,
+
           branch: {
             select: {
               id: true,
@@ -244,16 +279,14 @@ export class DashboardService {
       }),
     ]);
 
-    /*
-     * Prisma returns null when no rows exist for a Decimal sum.
-     */
     const todaySales = todaySalesAggregation._sum.grandTotal?.toString() ?? '0';
 
     /*
-     * 7. Build the dashboard response.
+     * 6. Build dashboard response.
      */
     return {
       user,
+
       hasBusiness: true,
 
       membership: {
@@ -292,27 +325,50 @@ export class DashboardService {
 
       stats: {
         todayReceipts,
+
         todaySales,
+
         totalReceipts,
+
         employees:
           membership.role === 'OWNER' ? business._count.memberships : 0,
       },
 
       recentReceipts: recentReceipts.map((receipt) => ({
         id: receipt.id,
+
         receiptNumber: receipt.receiptNumber,
+
         customerName: receipt.customerName,
+
         currency: receipt.currency,
+
         grandTotal: receipt.grandTotal.toString(),
+
         paymentMethod: receipt.paymentMethod,
+
         status: receipt.status,
+
         issuedAt: receipt.issuedAt,
+
         branch: receipt.branch,
       })),
 
-      subscription: {
-        plan: 'FREE',
-      },
+      subscription: business.subscription
+        ? {
+            id: business.subscription.id,
+            plan: business.subscription.plan,
+            status: business.subscription.status,
+            startsAt: business.subscription.startsAt,
+            endsAt: business.subscription.endsAt,
+          }
+        : {
+            id: null,
+            plan: 'FREE',
+            status: 'ACTIVE',
+            startsAt: null,
+            endsAt: null,
+          },
     };
   }
 
@@ -320,6 +376,7 @@ export class DashboardService {
     const dateRange = this.resolveAnalyticsDateRange(query);
 
     const previousPeriod = this.resolvePreviousPeriod(dateRange);
+
     /*
      * Find the user's active business and active branch
      * assignments.
@@ -329,9 +386,11 @@ export class DashboardService {
         userId,
         status: 'ACTIVE',
       },
+
       orderBy: {
         createdAt: 'asc',
       },
+
       select: {
         id: true,
         role: true,
@@ -349,6 +408,7 @@ export class DashboardService {
           where: {
             isActive: true,
           },
+
           select: {
             branchId: true,
           },
@@ -359,11 +419,16 @@ export class DashboardService {
     if (!membership) {
       throw new NotFoundException('No active business membership was found.');
     }
+
+    /*
+     * Analytics remain owner-only.
+     */
     if (membership.role !== 'OWNER') {
       throw new ForbiddenException(
         'Analytics are available only to the business owner.',
       );
     }
+
     const branchIds = membership.branchAssignments.map(
       (assignment) => assignment.branchId,
     );
@@ -382,6 +447,7 @@ export class DashboardService {
 
         previousPeriod: {
           dateFrom: previousPeriod.previousDateFrom,
+
           dateTo: previousPeriod.previousDateTo,
         },
 
@@ -416,7 +482,9 @@ export class DashboardService {
         })),
 
         highestValueReceipt: null,
+
         bestSalesDay: null,
+
         recentReceipts: [],
       };
     }
@@ -443,9 +511,11 @@ export class DashboardService {
 
       issuedAt: {
         gte: previousPeriod.previousDateFrom,
+
         lt: previousPeriod.previousDateTo,
       },
     };
+
     /*
      * Revenue calculations include only issued receipts.
      *
@@ -517,7 +587,9 @@ export class DashboardService {
       this.prisma.receipt.findMany({
         where: {
           ...baseReceiptWhere,
+
           status: 'ISSUED',
+
           customerName: {
             not: null,
           },
@@ -552,15 +624,10 @@ export class DashboardService {
       }),
 
       /*
-       * Payment-method breakdown.
-       */
-
-      /*
-       * Raw issued receipts used to build daily-sales data.
+       * Raw issued receipts used to build:
        *
-       * Prisma groupBy cannot reliably group a DateTime into a
-       * calendar date across all database/timezone combinations,
-       * so we group the returned rows in TypeScript.
+       * - daily sales
+       * - payment method breakdown
        */
       this.prisma.receipt.findMany({
         where: {
@@ -580,7 +647,7 @@ export class DashboardService {
       }),
 
       /*
-       * Largest issued receipt in the selected period.
+       * Largest issued receipt.
        */
       this.prisma.receipt.findFirst({
         where: {
@@ -611,7 +678,7 @@ export class DashboardService {
       }),
 
       /*
-       * Ten latest receipt records, including non-issued statuses.
+       * Ten latest receipt records.
        */
       this.prisma.receipt.findMany({
         where: baseReceiptWhere,
@@ -654,6 +721,10 @@ export class DashboardService {
 
     const averageReceiptValue =
       issuedAggregation._avg.grandTotal?.toString() ?? '0';
+
+    /*
+     * Payment method breakdown.
+     */
     const paymentMethodAccumulator = new Map<
       string,
       {
@@ -669,6 +740,7 @@ export class DashboardService {
       };
 
       current.receiptCount += 1;
+
       current.totalSales += Number(receipt.grandTotal);
 
       paymentMethodAccumulator.set(receipt.paymentMethod, current);
@@ -677,13 +749,18 @@ export class DashboardService {
     const paymentMethods = Array.from(paymentMethodAccumulator.entries())
       .map(([paymentMethod, values]) => ({
         paymentMethod,
+
         receiptCount: values.receiptCount,
+
         totalSales: String(values.totalSales),
       }))
       .sort(
         (first, second) => Number(second.totalSales) - Number(first.totalSales),
       );
 
+    /*
+     * Daily sales.
+     */
     const dailyAccumulator = new Map<string, DailySalesAccumulator>();
 
     for (const row of dailyReceiptRows) {
@@ -695,6 +772,7 @@ export class DashboardService {
       };
 
       existing.receiptCount += 1;
+
       existing.totalSales += Number(row.grandTotal);
 
       dailyAccumulator.set(dateKey, existing);
@@ -708,23 +786,31 @@ export class DashboardService {
 
       return {
         date,
+
         receiptCount: day?.receiptCount ?? 0,
+
         totalSales: String(day?.totalSales ?? 0),
       };
     });
 
-    /**Calculate Best Sales Day */
+    /*
+     * Best sales day.
+     */
     const bestSalesDay = dailySales.reduce<{
       date: string;
       receiptCount: number;
       totalSales: string;
-    } | null>((best, day) => {
-      if (!best) {
-        return day;
-      }
+    } | null>(
+      (best, day) => {
+        if (!best) {
+          return day;
+        }
 
-      return Number(day.totalSales) > Number(best.totalSales) ? day : best;
-    }, null);
+        return Number(day.totalSales) > Number(best.totalSales) ? day : best;
+      },
+
+      null,
+    );
 
     const meaningfulBestSalesDay =
       bestSalesDay && Number(bestSalesDay.totalSales) > 0 ? bestSalesDay : null;
@@ -793,6 +879,7 @@ export class DashboardService {
 
       previousPeriod: {
         dateFrom: previousPeriod.previousDateFrom,
+
         dateTo: previousPeriod.previousDateTo,
       },
 
@@ -800,18 +887,27 @@ export class DashboardService {
 
       summary: {
         totalSales,
+
         receiptCount,
+
         averageReceiptValue,
+
         uniqueCustomers: namedCustomers.length,
+
         issuedReceipts,
+
         voidedReceipts,
+
         correctedReceipts,
       },
 
       comparison: {
         previousTotalSales,
+
         previousReceiptCount,
+
         salesGrowthPercentage,
+
         receiptGrowthPercentage,
       },
 
@@ -827,7 +923,9 @@ export class DashboardService {
     };
   }
 
-  /**Start of day */
+  /**
+   * Start of day.
+   */
   private startOfDay(date: Date): Date {
     const result = new Date(date);
 
@@ -836,7 +934,9 @@ export class DashboardService {
     return result;
   }
 
-  /**Add days to the date*/
+  /**
+   * Add days to a date.
+   */
   private addDays(date: Date, numberOfDays: number): Date {
     const result = new Date(date);
 
@@ -845,12 +945,16 @@ export class DashboardService {
     return result;
   }
 
-  /**Start of month */
+  /**
+   * Start of month.
+   */
   private startOfMonth(date: Date): Date {
     return new Date(date.getFullYear(), date.getMonth(), 1);
   }
 
-  /** custom-date validation*/
+  /**
+   * Custom date validation.
+   */
   private resolveCustomDateRange(
     dateFrom?: string,
     dateTo?: string,
@@ -897,46 +1001,56 @@ export class DashboardService {
 
     return {
       dateFrom: parsedDateFrom,
+
       dateTo: parsedDateTo,
     };
   }
 
-  /** analytics date-range resolver*/
+  /**
+   * Analytics date-range resolver.
+   */
   private resolveAnalyticsDateRange(
     query: DashboardAnalyticsQueryDto,
   ): AnalyticsDateRange {
     const now = new Date();
+
     const startOfToday = this.startOfDay(now);
+
     const startOfTomorrow = this.addDays(startOfToday, 1);
 
     switch (query.period) {
       case AnalyticsPeriod.TODAY:
         return {
           dateFrom: startOfToday,
+
           dateTo: startOfTomorrow,
         };
 
       case AnalyticsPeriod.YESTERDAY:
         return {
           dateFrom: this.addDays(startOfToday, -1),
+
           dateTo: startOfToday,
         };
 
       case AnalyticsPeriod.LAST_7_DAYS:
         return {
           dateFrom: this.addDays(startOfToday, -6),
+
           dateTo: startOfTomorrow,
         };
 
       case AnalyticsPeriod.LAST_30_DAYS:
         return {
           dateFrom: this.addDays(startOfToday, -29),
+
           dateTo: startOfTomorrow,
         };
 
       case AnalyticsPeriod.THIS_MONTH:
         return {
           dateFrom: this.startOfMonth(now),
+
           dateTo: startOfTomorrow,
         };
 
@@ -951,6 +1065,7 @@ export class DashboardService {
 
         return {
           dateFrom: startOfPreviousMonth,
+
           dateTo: startOfCurrentMonth,
         };
       }
@@ -965,6 +1080,9 @@ export class DashboardService {
     }
   }
 
+  /**
+   * Resolve previous period.
+   */
   private resolvePreviousPeriod(
     currentRange: AnalyticsDateRange,
   ): AnalyticsComparison {
@@ -977,21 +1095,19 @@ export class DashboardService {
 
     return {
       previousDateFrom,
+
       previousDateTo,
     };
   }
 
-  /**Safe Growth Percentage Helper */
+  /**
+   * Safe growth percentage helper.
+   */
   private calculateGrowthPercentage(
     currentValue: number,
     previousValue: number,
   ): number | null {
     if (previousValue === 0) {
-      /*
-       * There is no meaningful percentage increase from zero.
-       *
-       * null means "not comparable."
-       */
       return currentValue === 0 ? 0 : null;
     }
 
@@ -1000,7 +1116,9 @@ export class DashboardService {
     return Number(growth.toFixed(2));
   }
 
-  /**Date Key Helper */
+  /**
+   * Date-key helper.
+   */
   private formatDateKey(date: Date): string {
     const year = date.getFullYear();
 
@@ -1011,7 +1129,9 @@ export class DashboardService {
     return `${year}-${month}-${day}`;
   }
 
-  /**Analytic Day Generator */
+  /**
+   * Analytics day generator.
+   */
   private generateDateKeys(dateFrom: Date, dateTo: Date): string[] {
     const dates: string[] = [];
 

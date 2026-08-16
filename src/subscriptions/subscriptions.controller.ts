@@ -29,8 +29,8 @@ export class SubscriptionsController {
   }
 
   @Get('plans')
-  getPlans() {
-    return this.subscriptionsService.getPlans();
+  getPlans(@CurrentUser() user: AccessTokenPayload) {
+    return this.subscriptionsService.getPlans(user.sub);
   }
 
   @Post('checkout')

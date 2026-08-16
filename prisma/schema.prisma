@@ -23,11 +23,12 @@ model Business {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  branches     Branch[]
-  memberships  BusinessMembership[]
-  receipts     Receipt[]
-  customers    Customer[]
-  subscription Subscription?
+  branches             Branch[]
+  memberships          BusinessMembership[]
+  receipts             Receipt[]
+  customers            Customer[]
+  subscription         Subscription?
+  subscriptionPayments SubscriptionPayment[]
 }
 
 model Branch {
@@ -77,12 +78,13 @@ model User {
   createdAt    DateTime @default(now())
   updatedAt    DateTime @updatedAt
 
-  memberships       BusinessMembership[]
-  authSessions      AuthSession[]
-  createdReceipts   Receipt[]
-  createdCustomers  Customer[]
-  voidedReceipts    Receipt[]            @relation("VoidedReceipts")
-  correctedReceipts Receipt[]            @relation("CorrectedByUser")
+  memberships                   BusinessMembership[]
+  authSessions                  AuthSession[]
+  createdReceipts               Receipt[]
+  createdCustomers              Customer[]
+  voidedReceipts                Receipt[]             @relation("VoidedReceipts")
+  correctedReceipts             Receipt[]             @relation("CorrectedByUser")
+  initiatedSubscriptionPayments SubscriptionPayment[] @relation("SubscriptionPaymentsInitiatedBy")
 }
 
 model BusinessMembership {
@@ -257,7 +259,10 @@ model ReceiptItem {
   @@index([receiptId])
 }
 
-//Subscriptions/
+/// =====================================================
+// SUBSCRIPTIONS
+// =====================================================
+
 enum SubscriptionPlan {
   FREE
   STARTER
@@ -272,6 +277,28 @@ enum SubscriptionStatus {
   EXPIRED
 }
 
+enum SubscriptionBillingPeriod {
+  MONTHLY
+  ANNUAL
+}
+
+enum SubscriptionPaymentStatus {
+  PENDING
+  PROCESSING
+  SUCCESSFUL
+  FAILED
+  CANCELLED
+  EXPIRED
+}
+
+enum PaymentProvider {
+  PAYUNIT
+  PAYSTACK
+  STRIPE
+  DLOCAL
+  FLUTTERWAVE
+}
+
 model Subscription {
   id        String             @id @default(uuid())
   plan      SubscriptionPlan   @default(FREE)
@@ -283,4 +310,50 @@ model Subscription {
 
   businessId String   @unique
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  payments SubscriptionPayment[]
+}
+
+model SubscriptionPayment {
+  id String @id @default(uuid())
+
+  reference String @unique
+
+  plan          SubscriptionPlan
+  billingPeriod SubscriptionBillingPeriod
+
+  amount   Decimal
+  currency String
+
+  provider PaymentProvider
+
+  status SubscriptionPaymentStatus @default(PENDING)
+
+  providerTransactionId String?
+  providerReference     String?
+  checkoutUrl           String?
+  failureReason         String?
+
+  paidAt    DateTime?
+  expiresAt DateTime?
+
+  createdAt DateTime @default(now())
+  updatedAt DateTime @updatedAt
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  subscriptionId String
+  subscription   Subscription @relation(fields: [subscriptionId], references: [id], onDelete: Cascade)
+
+  initiatedByUserId String?
+  initiatedByUser   User?   @relation("SubscriptionPaymentsInitiatedBy", fields: [initiatedByUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([subscriptionId])
+  @@index([initiatedByUserId])
+  @@index([status])
+  @@index([provider])
+  @@index([createdAt])
+  @@index([providerTransactionId])
 }

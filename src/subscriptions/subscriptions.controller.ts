@@ -1,10 +1,11 @@
-import { Controller, Get, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
 
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
 import type { AccessTokenPayload } from '../auth/types/access-token-payload.type';
 
 import { SubscriptionsService } from './subscriptions.service';
+import { CreateSubscriptionCheckoutDto } from './dto/create-subscription-checkout.dto';
 
 @Controller('subscriptions')
 @UseGuards(JwtAuthGuard)
@@ -25,5 +26,22 @@ export class SubscriptionsController {
   @Get('me')
   getMySubscription(@CurrentUser() user: AccessTokenPayload) {
     return this.subscriptionsService.getMySubscription(user.sub);
+  }
+
+  @Get('plans')
+  getPlans() {
+    return this.subscriptionsService.getPlans();
+  }
+
+  @Post('checkout')
+  createCheckout(
+    @CurrentUser() user: AccessTokenPayload,
+    @Body() dto: CreateSubscriptionCheckoutDto,
+  ) {
+    return this.subscriptionsService.createCheckout(
+      user.sub,
+      dto.plan,
+      dto.billingPeriod,
+    );
   }
 }

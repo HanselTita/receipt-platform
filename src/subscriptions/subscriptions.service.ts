@@ -35,6 +35,12 @@ export class SubscriptionsService {
    */
 
   async getBusinessSubscription(businessId: string) {
+    /*
+     * Apply any due subscription change before calculating
+     * the business's current limits.
+     */
+    await this.applyScheduledPlanIfDue(businessId);
+
     const subscription = await this.prisma.subscription.findUnique({
       where: {
         businessId,
@@ -42,8 +48,8 @@ export class SubscriptionsService {
     });
 
     /*
-     * Older businesses created before subscriptions were added
-     * are treated safely as FREE.
+     * Older businesses created before subscriptions existed
+     * are safely treated as FREE.
      */
     if (!subscription) {
       return {
@@ -53,6 +59,8 @@ export class SubscriptionsService {
         status: 'ACTIVE' as const,
         startsAt: null,
         endsAt: null,
+        scheduledPlan: null,
+        scheduledPlanAt: null,
         limits: SUBSCRIPTION_PLAN_LIMITS.FREE,
       };
     }
@@ -180,6 +188,8 @@ export class SubscriptionsService {
         status: subscription.status,
         startsAt: subscription.startsAt,
         endsAt: subscription.endsAt,
+        scheduledPlan: subscription.scheduledPlan ?? null,
+        scheduledPlanAt: subscription.scheduledPlanAt ?? null,
       },
 
       limits,
@@ -937,6 +947,13 @@ export class SubscriptionsService {
           startsAt,
 
           endsAt,
+
+          /*
+           * A newly paid subscription supersedes any
+           * previously scheduled downgrade/cancellation.
+           */
+          scheduledPlan: null,
+          scheduledPlanAt: null,
         },
       });
 
@@ -986,10 +1003,325 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * PRIVATE HELPERS
+   * SCHEDULE SUBSCRIPTION PLAN CHANGE
    * ============================================================
    */
 
+  async schedulePlanChange(userId: string, targetPlan: SubscriptionPlan) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+
+        business: {
+          select: {
+            id: true,
+            businessName: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can manage subscription changes.',
+      );
+    }
+
+    const subscription = await this.prisma.subscription.findUnique({
+      where: {
+        businessId: membership.businessId,
+      },
+    });
+
+    if (!subscription) {
+      throw new NotFoundException('Business subscription could not be found.');
+    }
+
+    if (subscription.status !== 'ACTIVE') {
+      throw new ForbiddenException(
+        'Only an active subscription can be changed.',
+      );
+    }
+
+    if (subscription.plan === targetPlan) {
+      throw new ForbiddenException(
+        `Your business is already on the ${targetPlan} plan.`,
+      );
+    }
+
+    const currentRank = this.getPlanRank(subscription.plan);
+
+    const targetRank = this.getPlanRank(targetPlan);
+
+    /*
+     * Upgrades must go through checkout.
+     */
+    if (targetRank > currentRank) {
+      throw new ForbiddenException(
+        'Upgrades must be completed through subscription checkout.',
+      );
+    }
+
+    /*
+     * FREE subscriptions have no paid period to finish.
+     */
+    if (subscription.plan === 'FREE') {
+      throw new ForbiddenException('The FREE plan cannot be downgraded.');
+    }
+
+    if (!subscription.endsAt) {
+      throw new ForbiddenException(
+        'The current subscription does not have a valid billing period end date.',
+      );
+    }
+
+    /*
+     * Do not schedule against an already expired period.
+     */
+    if (subscription.endsAt.getTime() <= Date.now()) {
+      throw new ForbiddenException(
+        'The current subscription period has already ended.',
+      );
+    }
+
+    const updatedSubscription = await this.prisma.subscription.update({
+      where: {
+        id: subscription.id,
+      },
+
+      data: {
+        scheduledPlan: targetPlan,
+        scheduledPlanAt: subscription.endsAt,
+      },
+    });
+
+    return {
+      message:
+        targetPlan === 'FREE'
+          ? `Your ${subscription.plan} subscription will end at the close of the current billing period.`
+          : `Your subscription will change from ${subscription.plan} to ${targetPlan} at the end of the current billing period.`,
+
+      business: membership.business,
+
+      subscription: {
+        id: updatedSubscription.id,
+        plan: updatedSubscription.plan,
+        status: updatedSubscription.status,
+        startsAt: updatedSubscription.startsAt,
+        endsAt: updatedSubscription.endsAt,
+
+        scheduledPlan: updatedSubscription.scheduledPlan,
+
+        scheduledPlanAt: updatedSubscription.scheduledPlanAt,
+      },
+    };
+  }
+
+  /*
+   * ============================================================
+   * CANCEL SCHEDULED PLAN CHANGE
+   * ============================================================
+   */
+
+  async cancelScheduledPlanChange(userId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+
+        business: {
+          select: {
+            id: true,
+            businessName: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can manage subscription changes.',
+      );
+    }
+
+    const subscription = await this.prisma.subscription.findUnique({
+      where: {
+        businessId: membership.businessId,
+      },
+    });
+
+    if (!subscription) {
+      throw new NotFoundException('Business subscription could not be found.');
+    }
+
+    if (!subscription.scheduledPlan || !subscription.scheduledPlanAt) {
+      throw new ForbiddenException(
+        'There is no scheduled subscription change to cancel.',
+      );
+    }
+
+    const previousScheduledPlan = subscription.scheduledPlan;
+
+    const updatedSubscription = await this.prisma.subscription.update({
+      where: {
+        id: subscription.id,
+      },
+
+      data: {
+        scheduledPlan: null,
+        scheduledPlanAt: null,
+      },
+    });
+
+    return {
+      message: 'The scheduled subscription change has been cancelled.',
+
+      cancelledChange: {
+        plan: previousScheduledPlan,
+      },
+
+      business: membership.business,
+
+      subscription: {
+        id: updatedSubscription.id,
+        plan: updatedSubscription.plan,
+        status: updatedSubscription.status,
+        startsAt: updatedSubscription.startsAt,
+        endsAt: updatedSubscription.endsAt,
+        scheduledPlan: null,
+        scheduledPlanAt: null,
+      },
+    };
+  }
+
+  /*
+   * ============================================================
+   * APPLY SCHEDULED PLAN IF DUE
+   * ============================================================
+   */
+  async applyScheduledPlanIfDue(businessId: string) {
+    const subscription = await this.prisma.subscription.findUnique({
+      where: {
+        businessId,
+      },
+    });
+
+    if (!subscription) {
+      return null;
+    }
+
+    if (!subscription.scheduledPlan || !subscription.scheduledPlanAt) {
+      return subscription;
+    }
+
+    const now = new Date();
+
+    if (subscription.scheduledPlanAt.getTime() > now.getTime()) {
+      return subscription;
+    }
+
+    const scheduledPlan = subscription.scheduledPlan;
+
+    /*
+     * Cancellation to FREE can be applied immediately once
+     * the already-paid billing period has ended.
+     */
+    if (scheduledPlan === 'FREE') {
+      return this.prisma.subscription.update({
+        where: {
+          id: subscription.id,
+        },
+
+        data: {
+          plan: 'FREE',
+          status: 'ACTIVE',
+
+          startsAt: now,
+          endsAt: null,
+
+          scheduledPlan: null,
+          scheduledPlanAt: null,
+        },
+      });
+    }
+
+    /*
+     * IMPORTANT:
+     *
+     * We must never activate another paid plan without a
+     * successful payment for its new billing period.
+     *
+     * The old paid period has expired, so temporarily return
+     * the business to FREE while preserving the user's chosen
+     * paid plan as the intended next plan.
+     *
+     * Later our renewal flow will initiate checkout for this
+     * scheduled paid plan.
+     */
+    return this.prisma.subscription.update({
+      where: {
+        id: subscription.id,
+      },
+
+      data: {
+        plan: 'FREE',
+        status: 'ACTIVE',
+
+        startsAt: now,
+        endsAt: null,
+
+        scheduledPlan,
+        scheduledPlanAt: null,
+      },
+    });
+  }
+
+  /*
+   * ============================================================
+   * PRIVATE HELPERS
+   * ============================================================
+   */
+  private getPlanRank(plan: SubscriptionPlan): number {
+    const ranks: Record<SubscriptionPlan, number> = {
+      FREE: 0,
+      STARTER: 1,
+      BUSINESS: 2,
+      PRO: 3,
+    };
+
+    return ranks[plan];
+  }
   private extractPayUnitReference(payload: unknown): string {
     if (typeof payload !== 'object' || payload === null) {
       throw new ForbiddenException('Invalid PayUnit notification payload.');

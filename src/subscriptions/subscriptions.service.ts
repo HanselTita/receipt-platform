@@ -29,11 +29,11 @@ export class SubscriptionsService {
   ) {}
 
   /*
-   * Return the subscription attached to a business.
-   *
-   * Older businesses may not yet have a Subscription row,
-   * so we safely treat them as FREE.
+   * ============================================================
+   * BUSINESS SUBSCRIPTION
+   * ============================================================
    */
+
   async getBusinessSubscription(businessId: string) {
     const subscription = await this.prisma.subscription.findUnique({
       where: {
@@ -41,6 +41,10 @@ export class SubscriptionsService {
       },
     });
 
+    /*
+     * Older businesses created before subscriptions were added
+     * are treated safely as FREE.
+     */
     if (!subscription) {
       return {
         id: null,
@@ -60,13 +64,12 @@ export class SubscriptionsService {
   }
 
   /*
-   * Get the current authenticated owner's subscription,
-   * usage and plan limits.
-   *
-   * Used by:
-   *
+   * ============================================================
+   * GET CURRENT OWNER SUBSCRIPTION
    * GET /subscriptions/me
+   * ============================================================
    */
+
   async getMySubscription(userId: string) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
@@ -99,9 +102,6 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Subscription management belongs to the owner.
-     */
     if (membership.role !== 'OWNER') {
       throw new ForbiddenException(
         'Only the business owner can view subscription information.',
@@ -126,7 +126,6 @@ export class SubscriptionsService {
         this.prisma.branch.count({
           where: {
             businessId: membership.businessId,
-
             isActive: true,
           },
         }),
@@ -134,7 +133,6 @@ export class SubscriptionsService {
         this.prisma.businessMembership.count({
           where: {
             businessId: membership.businessId,
-
             status: 'ACTIVE',
 
             role: {
@@ -158,9 +156,6 @@ export class SubscriptionsService {
 
     const limits = subscription.limits;
 
-    /*
-     * null means unlimited.
-     */
     const remaining = {
       branches:
         limits.maxBranches === null
@@ -181,13 +176,9 @@ export class SubscriptionsService {
 
       subscription: {
         id: subscription.id,
-
         plan: subscription.plan,
-
         status: subscription.status,
-
         startsAt: subscription.startsAt,
-
         endsAt: subscription.endsAt,
       },
 
@@ -209,8 +200,11 @@ export class SubscriptionsService {
   }
 
   /*
-   * Analytics access.
+   * ============================================================
+   * SUBSCRIPTION PLAN ENFORCEMENT
+   * ============================================================
    */
+
   async assertAnalyticsAllowed(businessId: string) {
     const subscription = await this.getBusinessSubscription(businessId);
 
@@ -221,9 +215,6 @@ export class SubscriptionsService {
     }
   }
 
-  /*
-   * Branch creation limit.
-   */
   async assertCanCreateBranch(businessId: string) {
     const subscription = await this.getBusinessSubscription(businessId);
 
@@ -249,9 +240,6 @@ export class SubscriptionsService {
     }
   }
 
-  /*
-   * Staff-member limit.
-   */
   async assertCanAddStaff(businessId: string) {
     const subscription = await this.getBusinessSubscription(businessId);
 
@@ -264,7 +252,6 @@ export class SubscriptionsService {
     const staffCount = await this.prisma.businessMembership.count({
       where: {
         businessId,
-
         status: 'ACTIVE',
 
         role: {
@@ -282,9 +269,6 @@ export class SubscriptionsService {
     }
   }
 
-  /*
-   * Monthly receipt limit.
-   */
   async assertCanIssueReceipt(businessId: string) {
     const subscription = await this.getBusinessSubscription(businessId);
 
@@ -318,9 +302,6 @@ export class SubscriptionsService {
     }
   }
 
-  /*
-   * Business logo / receipt-footer branding.
-   */
   async assertCustomBrandingAllowed(businessId: string) {
     const subscription = await this.getBusinessSubscription(businessId);
 
@@ -332,11 +313,12 @@ export class SubscriptionsService {
   }
 
   /*
-   * Return available subscription plans.
-   *
-   * GLOBAL remains the default so this endpoint
-   * remains backwards compatible.
+   * ============================================================
+   * SUBSCRIPTION PLAN CATALOGUE
+   * GET /subscriptions/plans
+   * ============================================================
    */
+
   async getPlans(userId: string) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
@@ -411,31 +393,19 @@ export class SubscriptionsService {
   }
 
   /*
-   * Create and initialize a paid subscription checkout.
-   *
-   * The mobile application supplies:
-   *
-   * - desired plan
-   * - billing period
-   *
-   * It does NOT supply:
-   *
-   * - price
-   * - currency
-   * - payment provider
-   *
-   * Those values are controlled by the backend.
+   * ============================================================
+   * CREATE SUBSCRIPTION CHECKOUT
+   * POST /subscriptions/checkout
+   * ============================================================
    */
+
   async createCheckout(
     userId: string,
     plan: SubscriptionPlan,
     billingPeriod: SubscriptionBillingPeriod,
   ) {
     /*
-     * 1. Find the owner's active business.
-     *
-     * We also load the main branch so the backend can
-     * determine the appropriate regional pricing market.
+     * Load owner, business and main branch.
      */
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
@@ -493,39 +463,32 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * 2. Only the business owner can manage billing.
-     */
     if (membership.role !== 'OWNER') {
       throw new ForbiddenException(
         'Only the business owner can manage subscription billing.',
       );
     }
 
-    /*
-     * FREE never requires payment checkout.
-     */
     if (plan === 'FREE') {
       throw new ForbiddenException('The FREE plan does not require checkout.');
     }
 
-    /*
-     * 3. Load the business subscription.
-     */
-    const subscription = await this.prisma.subscription.findUnique({
+    const subscription = await this.prisma.subscription.upsert({
       where: {
         businessId: membership.businessId,
       },
+
+      update: {},
+
+      create: {
+        businessId: membership.businessId,
+
+        plan: 'FREE',
+
+        status: 'ACTIVE',
+      },
     });
 
-    if (!subscription) {
-      throw new NotFoundException('Business subscription could not be found.');
-    }
-
-    /*
-     * Prevent unnecessary checkout when already
-     * subscribed to the selected active plan.
-     */
     if (subscription.plan === plan && subscription.status === 'ACTIVE') {
       throw new ForbiddenException(
         `Your business is already on the ${plan} plan.`,
@@ -533,15 +496,14 @@ export class SubscriptionsService {
     }
 
     /*
-     * 4. Determine the pricing market from the
-     * business's main branch.
+     * Determine pricing market.
      */
     const mainBranch = membership.business.branches[0];
 
     const market = this.resolvePricingMarket(mainBranch?.country);
 
     /*
-     * 5. Obtain the official backend-controlled price.
+     * Obtain backend-controlled pricing.
      */
     const pricing = getSubscriptionPricing(market, plan);
 
@@ -555,15 +517,8 @@ export class SubscriptionsService {
     }
 
     /*
-     * For the first production payment provider,
-     * only Cameroon checkout is available.
-     *
-     * Other markets will later resolve to:
-     *
-     * PAYSTACK
-     * STRIPE
-     * DLOCAL
-     * etc.
+     * PayUnit is currently our first implemented
+     * payment provider and is enabled for Cameroon.
      */
     if (market !== 'CM') {
       throw new ForbiddenException(
@@ -573,23 +528,16 @@ export class SubscriptionsService {
 
     const provider = 'PAYUNIT' as const;
 
+    const reference = this.generatePaymentReference();
+
     /*
-     * PayUnit hosted checkout links are short-lived.
+     * PayUnit hosted checkout is short-lived.
      */
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
     /*
-     * Generate our own internal SwiftReceipt
-     * transaction reference.
-     */
-    const reference = this.generatePaymentReference();
-
-    /*
-     * 6. Create our internal payment record BEFORE
-     * contacting the external payment provider.
-     *
-     * This gives SwiftReceipt an authoritative record
-     * regardless of what happens at the provider.
+     * Create internal SwiftReceipt payment before
+     * contacting PayUnit.
      */
     const payment = await this.prisma.subscriptionPayment.create({
       data: {
@@ -635,13 +583,10 @@ export class SubscriptionsService {
 
     try {
       /*
-       * 7. Resolve the appropriate payment provider.
+       * Resolve PayUnit through our provider registry.
        */
       const adapter = this.paymentProviderRegistry.get(provider);
 
-      /*
-       * 8. Ask PayUnit to initialize hosted checkout.
-       */
       const initialized = await adapter.initializePayment({
         reference: payment.reference,
 
@@ -669,7 +614,7 @@ export class SubscriptionsService {
       });
 
       /*
-       * 9. Save the provider checkout details.
+       * Save provider checkout information.
        */
       const updatedPayment = await this.prisma.subscriptionPayment.update({
         where: {
@@ -706,10 +651,6 @@ export class SubscriptionsService {
       return {
         message: 'Subscription checkout initialized successfully.',
 
-        /*
-         * Don't expose the branches used internally to
-         * determine regional pricing.
-         */
         business: {
           id: membership.business.id,
 
@@ -726,8 +667,7 @@ export class SubscriptionsService {
       };
     } catch (error) {
       /*
-       * 10. Preserve failed payment attempts for
-       * audit/debugging purposes.
+       * Preserve failed initialization for audit/debugging.
        */
       await this.prisma.subscriptionPayment.update({
         where: {
@@ -749,12 +689,367 @@ export class SubscriptionsService {
   }
 
   /*
-   * Convert the business country into the appropriate
-   * SwiftReceipt pricing market.
-   *
-   * This intentionally stays separate from provider
-   * selection so regional pricing and gateway selection
-   * can evolve independently.
+   * ============================================================
+   * PAYUNIT NOTIFICATION / VERIFICATION
+   * ============================================================
+   */
+
+  async processPayUnitNotification(payload: unknown) {
+    /*
+     * Extract our SwiftReceipt reference from PayUnit's
+     * notification payload.
+     */
+    const reference = this.extractPayUnitReference(payload);
+
+    const payment = await this.prisma.subscriptionPayment.findUnique({
+      where: {
+        reference,
+      },
+
+      include: {
+        subscription: true,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Subscription payment could not be found.');
+    }
+
+    /*
+     * Idempotency.
+     *
+     * PayUnit may send notifications more than once.
+     */
+    if (payment.status === 'SUCCESSFUL') {
+      return {
+        message: 'Payment was already processed successfully.',
+
+        payment: {
+          id: payment.id,
+
+          reference: payment.reference,
+
+          status: payment.status,
+
+          plan: payment.plan,
+        },
+      };
+    }
+
+    if (payment.provider !== 'PAYUNIT') {
+      throw new ForbiddenException(
+        'This payment does not belong to the PayUnit provider.',
+      );
+    }
+
+    /*
+     * Never trust the webhook status alone.
+     *
+     * Verify directly with PayUnit.
+     */
+    const adapter = this.paymentProviderRegistry.get('PAYUNIT');
+
+    const verified = await adapter.verifyPayment({
+      reference: payment.reference,
+
+      providerReference: payment.providerReference,
+
+      providerTransactionId: payment.providerTransactionId,
+    });
+
+    /*
+     * If PayUnit does not confirm success, preserve the
+     * appropriate local state but do not activate anything.
+     */
+    if (!verified.successful) {
+      const status = this.mapPayUnitStatus(verified.rawStatus);
+
+      const updatedPayment = await this.prisma.subscriptionPayment.update({
+        where: {
+          id: payment.id,
+        },
+
+        data: {
+          status,
+
+          providerTransactionId:
+            verified.providerTransactionId ?? payment.providerTransactionId,
+
+          providerReference:
+            verified.providerReference ?? payment.providerReference,
+        },
+
+        select: {
+          id: true,
+          reference: true,
+          status: true,
+          plan: true,
+          billingPeriod: true,
+        },
+      });
+
+      return {
+        message: 'Payment has not been confirmed as successful.',
+
+        payment: updatedPayment,
+      };
+    }
+
+    /*
+     * ========================================================
+     * SECURITY: VERIFY AMOUNT
+     * ========================================================
+     */
+
+    const expectedAmount = Number(payment.amount.toString());
+
+    const receivedAmount = Number(verified.amount);
+
+    if (!Number.isFinite(receivedAmount) || receivedAmount !== expectedAmount) {
+      await this.prisma.subscriptionPayment.update({
+        where: {
+          id: payment.id,
+        },
+
+        data: {
+          status: 'FAILED',
+
+          failureReason: `Verified amount mismatch. Expected ${payment.amount.toString()} ${payment.currency}, received ${verified.amount} ${verified.currency}.`,
+        },
+      });
+
+      throw new ForbiddenException(
+        'Verified payment amount does not match the expected subscription amount.',
+      );
+    }
+
+    /*
+     * ========================================================
+     * SECURITY: VERIFY CURRENCY
+     * ========================================================
+     */
+
+    if (payment.currency.toUpperCase() !== verified.currency.toUpperCase()) {
+      await this.prisma.subscriptionPayment.update({
+        where: {
+          id: payment.id,
+        },
+
+        data: {
+          status: 'FAILED',
+
+          failureReason: `Verified currency mismatch. Expected ${payment.currency}, received ${verified.currency}.`,
+        },
+      });
+
+      throw new ForbiddenException(
+        'Verified payment currency does not match the expected subscription currency.',
+      );
+    }
+
+    /*
+     * Calculate subscription period.
+     */
+    const startsAt = new Date();
+
+    const endsAt = this.calculateSubscriptionEndDate(
+      startsAt,
+      payment.billingPeriod,
+    );
+
+    /*
+     * ========================================================
+     * ATOMIC PAYMENT + SUBSCRIPTION ACTIVATION
+     * ========================================================
+     *
+     * Payment completion and subscription activation happen
+     * in the same database transaction.
+     */
+    const result = await this.prisma.$transaction(async (transaction) => {
+      /*
+       * Re-read the payment inside the transaction in case
+       * two PayUnit notifications arrive simultaneously.
+       */
+      const currentPayment = await transaction.subscriptionPayment.findUnique({
+        where: {
+          id: payment.id,
+        },
+      });
+
+      if (!currentPayment) {
+        throw new NotFoundException('Subscription payment could not be found.');
+      }
+
+      /*
+       * Another request may already have completed it.
+       */
+      if (currentPayment.status === 'SUCCESSFUL') {
+        const currentSubscription = await transaction.subscription.findUnique({
+          where: {
+            id: currentPayment.subscriptionId,
+          },
+        });
+
+        return {
+          payment: currentPayment,
+
+          subscription: currentSubscription,
+        };
+      }
+
+      /*
+       * Mark payment successful.
+       */
+      const completedPayment = await transaction.subscriptionPayment.update({
+        where: {
+          id: currentPayment.id,
+        },
+
+        data: {
+          status: 'SUCCESSFUL',
+
+          paidAt: startsAt,
+
+          failureReason: null,
+
+          providerTransactionId:
+            verified.providerTransactionId ??
+            currentPayment.providerTransactionId,
+
+          providerReference:
+            verified.providerReference ?? currentPayment.providerReference,
+        },
+      });
+
+      /*
+       * Activate the selected subscription plan.
+       */
+      const updatedSubscription = await transaction.subscription.update({
+        where: {
+          id: currentPayment.subscriptionId,
+        },
+
+        data: {
+          plan: currentPayment.plan,
+
+          status: 'ACTIVE',
+
+          startsAt,
+
+          endsAt,
+        },
+      });
+
+      return {
+        payment: completedPayment,
+
+        subscription: updatedSubscription,
+      };
+    });
+
+    return {
+      message: 'Subscription payment verified and plan activated successfully.',
+
+      payment: {
+        id: result.payment.id,
+
+        reference: result.payment.reference,
+
+        plan: result.payment.plan,
+
+        billingPeriod: result.payment.billingPeriod,
+
+        status: result.payment.status,
+
+        amount: result.payment.amount.toString(),
+
+        currency: result.payment.currency,
+
+        paidAt: result.payment.paidAt,
+      },
+
+      subscription: result.subscription
+        ? {
+            id: result.subscription.id,
+
+            plan: result.subscription.plan,
+
+            status: result.subscription.status,
+
+            startsAt: result.subscription.startsAt,
+
+            endsAt: result.subscription.endsAt,
+          }
+        : null,
+    };
+  }
+
+  /*
+   * ============================================================
+   * PRIVATE HELPERS
+   * ============================================================
+   */
+
+  private extractPayUnitReference(payload: unknown): string {
+    if (typeof payload !== 'object' || payload === null) {
+      throw new ForbiddenException('Invalid PayUnit notification payload.');
+    }
+
+    const body = payload as {
+      data?: {
+        transaction_id?: unknown;
+      };
+
+      transaction_id?: unknown;
+    };
+
+    const reference = body.data?.transaction_id ?? body.transaction_id;
+
+    if (typeof reference !== 'string' || !reference.trim()) {
+      throw new ForbiddenException(
+        'PayUnit notification does not contain a valid transaction reference.',
+      );
+    }
+
+    return reference.trim();
+  }
+
+  private mapPayUnitStatus(
+    status?: string | null,
+  ): 'PROCESSING' | 'FAILED' | 'CANCELLED' {
+    switch (status?.trim().toUpperCase()) {
+      case 'FAILED':
+        return 'FAILED';
+
+      case 'CANCELLED':
+        return 'CANCELLED';
+
+      case 'PENDING':
+      default:
+        return 'PROCESSING';
+    }
+  }
+
+  private calculateSubscriptionEndDate(
+    startsAt: Date,
+    billingPeriod: SubscriptionBillingPeriod,
+  ): Date {
+    const endsAt = new Date(startsAt);
+
+    if (billingPeriod === 'ANNUAL') {
+      endsAt.setFullYear(endsAt.getFullYear() + 1);
+
+      return endsAt;
+    }
+
+    endsAt.setMonth(endsAt.getMonth() + 1);
+
+    return endsAt;
+  }
+
+  /*
+   * Resolve regional pricing from the business's
+   * main-branch country.
    */
   private resolvePricingMarket(
     country?: string | null,
@@ -773,16 +1068,16 @@ export class SubscriptionsService {
   }
 
   /*
-   * Generate an internal SwiftReceipt payment reference.
+   * Internal SwiftReceipt transaction reference.
    *
-   * Avoid punctuation so it is compatible with providers
-   * that place restrictions on transaction references.
+   * We deliberately avoid hyphens and other punctuation
+   * for compatibility with payment providers.
    */
   private generatePaymentReference(): string {
-    const timestamp = Date.now();
+    const timestampPart = Date.now().toString(36).toUpperCase();
 
-    const randomPart = randomBytes(8).toString('hex').toUpperCase();
+    const randomPart = randomBytes(4).toString('hex').toUpperCase();
 
-    return `SWR${timestamp}${randomPart}`;
+    return `SWR${timestampPart}${randomPart}`;
   }
 }

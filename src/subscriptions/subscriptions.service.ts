@@ -1111,7 +1111,7 @@ export class SubscriptionsService {
         'Only the business owner can view subscription payment history.',
       );
     }
-
+    await this.expirePendingPayments(membership.businessId);
     const payments = await this.prisma.subscriptionPayment.findMany({
       where: {
         businessId: membership.businessId,
@@ -1124,24 +1124,21 @@ export class SubscriptionsService {
       select: {
         id: true,
         reference: true,
-
         plan: true,
         billingPeriod: true,
-
         amount: true,
         currency: true,
-
         provider: true,
         status: true,
 
-        providerReference: true,
         providerTransactionId: true,
+        providerReference: true,
 
-        paidAt: true,
-        expiresAt: true,
+        failureReason: true,
 
         createdAt: true,
-        updatedAt: true,
+        paidAt: true,
+        expiresAt: true,
       },
     });
 
@@ -1194,7 +1191,7 @@ export class SubscriptionsService {
         'Only the business owner can view subscription payment details.',
       );
     }
-
+    await this.expirePendingPayments(membership.businessId);
     const payment = await this.prisma.subscriptionPayment.findFirst({
       where: {
         id: paymentId,
@@ -1284,6 +1281,10 @@ export class SubscriptionsService {
       },
     });
 
+    /*
+     * Always verify that membership exists BEFORE accessing
+     * membership.businessId.
+     */
     if (!membership) {
       throw new NotFoundException(
         'You do not have an active business membership.',
@@ -1297,6 +1298,12 @@ export class SubscriptionsService {
     }
 
     /*
+     * Before contacting the payment provider, expire any
+     * abandoned checkout whose local checkout lifetime has passed.
+     */
+    await this.expirePendingPayments(membership.businessId);
+
+    /*
      * Security:
      *
      * Payment ID alone must never allow access to another
@@ -1305,11 +1312,14 @@ export class SubscriptionsService {
     const payment = await this.prisma.subscriptionPayment.findFirst({
       where: {
         id: paymentId,
+
         businessId: membership.businessId,
       },
 
       select: {
         id: true,
+        status: true,
+        failureReason: true,
       },
     });
 
@@ -1317,7 +1327,158 @@ export class SubscriptionsService {
       throw new NotFoundException('Subscription payment could not be found.');
     }
 
+    /*
+     * A locally expired/cancelled checkout should not continue
+     * contacting the payment provider.
+     */
+    if (payment.status === 'CANCELLED') {
+      throw new ForbiddenException(
+        payment.failureReason?.includes('expired')
+          ? 'This payment checkout has expired. Please start a new checkout.'
+          : 'This payment checkout was cancelled. Please start a new checkout.',
+      );
+    }
+
+    /*
+     * Failed payments can be retried through the retry-payment
+     * endpoint instead of repeatedly reconciling them.
+     */
+    if (payment.status === 'FAILED') {
+      throw new ForbiddenException(
+        'This payment has failed. Please start a new checkout.',
+      );
+    }
+
+    /*
+     * SUCCESSFUL payments are safe to pass through because
+     * verifyAndActivatePayment() has an idempotency fast path.
+     */
     return this.verifyAndActivatePayment(payment.id);
+  }
+
+  /*
+   * ============================================================
+   * EXPIRE ABANDONED PAYMENT ATTEMPTS
+   * ============================================================
+   */
+
+  async expirePendingPayments(businessId: string) {
+    const now = new Date();
+
+    const result = await this.prisma.subscriptionPayment.updateMany({
+      where: {
+        businessId,
+
+        status: {
+          in: ['PENDING', 'PROCESSING'],
+        },
+
+        expiresAt: {
+          not: null,
+          lte: now,
+        },
+      },
+
+      data: {
+        status: 'CANCELLED',
+
+        failureReason: 'Checkout expired before payment was confirmed.',
+      },
+    });
+
+    return {
+      expiredPayments: result.count,
+    };
+  }
+
+  /*
+   * ============================================================
+   * RETRY SUBSCRIPTION PAYMENT
+   * POST /subscriptions/payments/:id/retry
+   * ============================================================
+   */
+
+  async retrySubscriptionPayment(userId: string, paymentId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can retry subscription payments.',
+      );
+    }
+
+    /*
+     * Clean up stale attempts first.
+     */
+    await this.expirePendingPayments(membership.businessId);
+
+    const payment = await this.prisma.subscriptionPayment.findFirst({
+      where: {
+        id: paymentId,
+        businessId: membership.businessId,
+      },
+
+      select: {
+        id: true,
+
+        plan: true,
+
+        billingPeriod: true,
+
+        status: true,
+
+        expiresAt: true,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Subscription payment could not be found.');
+    }
+
+    /*
+     * Never retry a payment that already succeeded.
+     */
+    if (payment.status === 'SUCCESSFUL') {
+      throw new ForbiddenException('A successful payment cannot be retried.');
+    }
+
+    /*
+     * A payment that is still genuinely active should be
+     * reconciled rather than duplicated.
+     */
+    if (payment.status === 'PENDING' || payment.status === 'PROCESSING') {
+      throw new ForbiddenException(
+        'This checkout is still active. Check the payment status before starting another payment.',
+      );
+    }
+
+    /*
+     * Reuse our existing secure checkout pipeline.
+     *
+     * This creates a NEW SubscriptionPayment record with
+     * a NEW SwiftReceipt reference.
+     */
+    return this.createCheckout(userId, payment.plan, payment.billingPeriod);
   }
 
   /*

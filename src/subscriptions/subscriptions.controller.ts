@@ -241,4 +241,26 @@ export class SubscriptionsController {
       paymentId,
     );
   }
+
+  /*
+   * ============================================================
+   * RETRY SUBSCRIPTION PAYMENT
+   * ============================================================
+   *
+   * POST /subscriptions/payments/:id/retry
+   */
+
+  @Post('payments/:id/retry')
+  retrySubscriptionPayment(
+    @CurrentUser()
+    user: AccessTokenPayload,
+
+    @Param('id')
+    paymentId: string,
+  ) {
+    return this.subscriptionsService.retrySubscriptionPayment(
+      user.sub,
+      paymentId,
+    );
+  }
 }

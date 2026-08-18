@@ -263,4 +263,22 @@ export class SubscriptionsController {
       paymentId,
     );
   }
+
+  /*
+   * ============================================================
+   * FOREGROUND PAYMENT RECONCILIATION
+   * ============================================================
+   *
+   * POST /subscriptions/payments/reconcile
+   */
+
+  @Post('payments/reconcile')
+  reconcileSubscriptionPayments(
+    @CurrentUser()
+    user: AccessTokenPayload,
+  ) {
+    return this.subscriptionsService.reconcileRecentSubscriptionPayments(
+      user.sub,
+    );
+  }
 }

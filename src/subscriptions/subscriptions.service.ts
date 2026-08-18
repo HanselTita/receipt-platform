@@ -1483,6 +1483,146 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
+   * FOREGROUND PAYMENT RECONCILIATION
+   * POST /subscriptions/payments/reconcile
+   * ============================================================
+   */
+
+  async reconcileRecentSubscriptionPayments(userId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can reconcile subscription payments.',
+      );
+    }
+
+    /*
+     * First clean up stale local checkout attempts.
+     */
+    await this.expirePendingPayments(membership.businessId);
+
+    /*
+     * Only reconcile recent unresolved payments.
+     *
+     * This prevents repeatedly hitting the provider for old
+     * transactions that are no longer relevant.
+     */
+    const reconciliationWindowStart = new Date(
+      Date.now() - 24 * 60 * 60 * 1000,
+    );
+
+    const payments = await this.prisma.subscriptionPayment.findMany({
+      where: {
+        businessId: membership.businessId,
+
+        status: {
+          in: ['PENDING', 'PROCESSING'],
+        },
+
+        createdAt: {
+          gte: reconciliationWindowStart,
+        },
+      },
+
+      orderBy: {
+        createdAt: 'desc',
+      },
+
+      /*
+       * Keep the foreground reconciliation lightweight.
+       */
+      take: 5,
+
+      select: {
+        id: true,
+        status: true,
+      },
+    });
+
+    let successful = 0;
+    let processing = 0;
+    let failed = 0;
+    let cancelled = 0;
+    let errors = 0;
+
+    for (const payment of payments) {
+      try {
+        const result = await this.verifyAndActivatePayment(payment.id);
+
+        switch (result.payment.status) {
+          case 'SUCCESSFUL':
+            successful += 1;
+            break;
+
+          case 'FAILED':
+            failed += 1;
+            break;
+
+          case 'CANCELLED':
+            cancelled += 1;
+            break;
+
+          case 'PENDING':
+          case 'PROCESSING':
+          default:
+            processing += 1;
+            break;
+        }
+      } catch (error) {
+        /*
+         * One provider failure should not prevent the remaining
+         * transactions from being reconciled.
+         */
+        errors += 1;
+
+        console.warn(
+          `Unable to reconcile subscription payment ${payment.id}:`,
+          error,
+        );
+      }
+    }
+
+    return {
+      message:
+        payments.length === 0
+          ? 'No unresolved subscription payments required reconciliation.'
+          : 'Recent subscription payments were reconciled.',
+
+      checked: payments.length,
+
+      results: {
+        successful,
+        processing,
+        failed,
+        cancelled,
+        errors,
+      },
+    };
+  }
+
+  /*
+   * ============================================================
    * PRIVATE HELPERS
    * ============================================================
    */

@@ -1420,6 +1420,104 @@ export class SubscriptionsService {
     };
   }
 
+  async getPaymentDetails(userId: string, paymentId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+
+        business: {
+          select: {
+            id: true,
+            businessName: true,
+            defaultCurrency: true,
+          },
+        },
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can view subscription payment details.',
+      );
+    }
+
+    const payment = await this.prisma.subscriptionPayment.findFirst({
+      where: {
+        id: paymentId,
+        businessId: membership.businessId,
+      },
+
+      select: {
+        id: true,
+        reference: true,
+
+        plan: true,
+        billingPeriod: true,
+
+        amount: true,
+        currency: true,
+
+        provider: true,
+        status: true,
+
+        checkoutUrl: true,
+
+        providerReference: true,
+        providerTransactionId: true,
+
+        paidAt: true,
+        expiresAt: true,
+
+        failureReason: true,
+
+        createdAt: true,
+        updatedAt: true,
+
+        subscription: {
+          select: {
+            id: true,
+            plan: true,
+            status: true,
+            startsAt: true,
+            endsAt: true,
+          },
+        },
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Subscription payment could not be found.');
+    }
+
+    return {
+      business: membership.business,
+
+      payment: {
+        ...payment,
+
+        amount: payment.amount.toString(),
+      },
+
+      receiptAvailable: payment.status === 'SUCCESSFUL',
+    };
+  }
+
   /*
    * ============================================================
    * PRIVATE HELPERS

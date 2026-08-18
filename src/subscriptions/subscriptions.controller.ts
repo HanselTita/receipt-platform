@@ -1,4 +1,4 @@
-import { Body, Controller, Get, Post, UseGuards } from '@nestjs/common';
+import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
 
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -70,6 +70,28 @@ export class SubscriptionsController {
     user: AccessTokenPayload,
   ) {
     return this.subscriptionsService.getPaymentHistory(user.sub);
+  }
+
+  /*
+   * ============================================================
+   * PAYMENT DETAILS
+   * ============================================================
+   *
+   * GET /subscriptions/payments/:id
+   *
+   * Returns one subscription payment belonging to the
+   * authenticated business owner.
+   */
+
+  @Get('payments/:id')
+  getPaymentDetails(
+    @CurrentUser()
+    user: AccessTokenPayload,
+
+    @Param('id')
+    paymentId: string,
+  ) {
+    return this.subscriptionsService.getPaymentDetails(user.sub, paymentId);
   }
 
   /*

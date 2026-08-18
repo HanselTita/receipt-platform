@@ -706,8 +706,8 @@ export class SubscriptionsService {
 
   async processPayUnitNotification(payload: unknown) {
     /*
-     * Extract our SwiftReceipt reference from PayUnit's
-     * notification payload.
+     * Extract SwiftReceipt's internal payment reference from
+     * the PayUnit notification.
      */
     const reference = this.extractPayUnitReference(payload);
 
@@ -716,34 +716,14 @@ export class SubscriptionsService {
         reference,
       },
 
-      include: {
-        subscription: true,
+      select: {
+        id: true,
+        provider: true,
       },
     });
 
     if (!payment) {
       throw new NotFoundException('Subscription payment could not be found.');
-    }
-
-    /*
-     * Idempotency.
-     *
-     * PayUnit may send notifications more than once.
-     */
-    if (payment.status === 'SUCCESSFUL') {
-      return {
-        message: 'Payment was already processed successfully.',
-
-        payment: {
-          id: payment.id,
-
-          reference: payment.reference,
-
-          status: payment.status,
-
-          plan: payment.plan,
-        },
-      };
     }
 
     if (payment.provider !== 'PAYUNIT') {
@@ -753,252 +733,10 @@ export class SubscriptionsService {
     }
 
     /*
-     * Never trust the webhook status alone.
-     *
-     * Verify directly with PayUnit.
+     * Webhook and manual reconciliation deliberately use the
+     * exact same verification/activation pipeline.
      */
-    const adapter = this.paymentProviderRegistry.get('PAYUNIT');
-
-    const verified = await adapter.verifyPayment({
-      reference: payment.reference,
-
-      providerReference: payment.providerReference,
-
-      providerTransactionId: payment.providerTransactionId,
-    });
-
-    /*
-     * If PayUnit does not confirm success, preserve the
-     * appropriate local state but do not activate anything.
-     */
-    if (!verified.successful) {
-      const status = this.mapPayUnitStatus(verified.rawStatus);
-
-      const updatedPayment = await this.prisma.subscriptionPayment.update({
-        where: {
-          id: payment.id,
-        },
-
-        data: {
-          status,
-
-          providerTransactionId:
-            verified.providerTransactionId ?? payment.providerTransactionId,
-
-          providerReference:
-            verified.providerReference ?? payment.providerReference,
-        },
-
-        select: {
-          id: true,
-          reference: true,
-          status: true,
-          plan: true,
-          billingPeriod: true,
-        },
-      });
-
-      return {
-        message: 'Payment has not been confirmed as successful.',
-
-        payment: updatedPayment,
-      };
-    }
-
-    /*
-     * ========================================================
-     * SECURITY: VERIFY AMOUNT
-     * ========================================================
-     */
-
-    const expectedAmount = Number(payment.amount.toString());
-
-    const receivedAmount = Number(verified.amount);
-
-    if (!Number.isFinite(receivedAmount) || receivedAmount !== expectedAmount) {
-      await this.prisma.subscriptionPayment.update({
-        where: {
-          id: payment.id,
-        },
-
-        data: {
-          status: 'FAILED',
-
-          failureReason: `Verified amount mismatch. Expected ${payment.amount.toString()} ${payment.currency}, received ${verified.amount} ${verified.currency}.`,
-        },
-      });
-
-      throw new ForbiddenException(
-        'Verified payment amount does not match the expected subscription amount.',
-      );
-    }
-
-    /*
-     * ========================================================
-     * SECURITY: VERIFY CURRENCY
-     * ========================================================
-     */
-
-    if (payment.currency.toUpperCase() !== verified.currency.toUpperCase()) {
-      await this.prisma.subscriptionPayment.update({
-        where: {
-          id: payment.id,
-        },
-
-        data: {
-          status: 'FAILED',
-
-          failureReason: `Verified currency mismatch. Expected ${payment.currency}, received ${verified.currency}.`,
-        },
-      });
-
-      throw new ForbiddenException(
-        'Verified payment currency does not match the expected subscription currency.',
-      );
-    }
-
-    /*
-     * Calculate subscription period.
-     */
-    const startsAt = new Date();
-
-    const endsAt = this.calculateSubscriptionEndDate(
-      startsAt,
-      payment.billingPeriod,
-    );
-
-    /*
-     * ========================================================
-     * ATOMIC PAYMENT + SUBSCRIPTION ACTIVATION
-     * ========================================================
-     *
-     * Payment completion and subscription activation happen
-     * in the same database transaction.
-     */
-    const result = await this.prisma.$transaction(async (transaction) => {
-      /*
-       * Re-read the payment inside the transaction in case
-       * two PayUnit notifications arrive simultaneously.
-       */
-      const currentPayment = await transaction.subscriptionPayment.findUnique({
-        where: {
-          id: payment.id,
-        },
-      });
-
-      if (!currentPayment) {
-        throw new NotFoundException('Subscription payment could not be found.');
-      }
-
-      /*
-       * Another request may already have completed it.
-       */
-      if (currentPayment.status === 'SUCCESSFUL') {
-        const currentSubscription = await transaction.subscription.findUnique({
-          where: {
-            id: currentPayment.subscriptionId,
-          },
-        });
-
-        return {
-          payment: currentPayment,
-
-          subscription: currentSubscription,
-        };
-      }
-
-      /*
-       * Mark payment successful.
-       */
-      const completedPayment = await transaction.subscriptionPayment.update({
-        where: {
-          id: currentPayment.id,
-        },
-
-        data: {
-          status: 'SUCCESSFUL',
-
-          paidAt: startsAt,
-
-          failureReason: null,
-
-          providerTransactionId:
-            verified.providerTransactionId ??
-            currentPayment.providerTransactionId,
-
-          providerReference:
-            verified.providerReference ?? currentPayment.providerReference,
-        },
-      });
-
-      /*
-       * Activate the selected subscription plan.
-       */
-      const updatedSubscription = await transaction.subscription.update({
-        where: {
-          id: currentPayment.subscriptionId,
-        },
-
-        data: {
-          plan: currentPayment.plan,
-
-          status: 'ACTIVE',
-
-          startsAt,
-
-          endsAt,
-
-          /*
-           * A newly paid subscription supersedes any
-           * previously scheduled downgrade/cancellation.
-           */
-          scheduledPlan: null,
-          scheduledPlanAt: null,
-        },
-      });
-
-      return {
-        payment: completedPayment,
-
-        subscription: updatedSubscription,
-      };
-    });
-
-    return {
-      message: 'Subscription payment verified and plan activated successfully.',
-
-      payment: {
-        id: result.payment.id,
-
-        reference: result.payment.reference,
-
-        plan: result.payment.plan,
-
-        billingPeriod: result.payment.billingPeriod,
-
-        status: result.payment.status,
-
-        amount: result.payment.amount.toString(),
-
-        currency: result.payment.currency,
-
-        paidAt: result.payment.paidAt,
-      },
-
-      subscription: result.subscription
-        ? {
-            id: result.subscription.id,
-
-            plan: result.subscription.plan,
-
-            status: result.subscription.status,
-
-            startsAt: result.subscription.startsAt,
-
-            endsAt: result.subscription.endsAt,
-          }
-        : null,
-    };
+    return this.verifyAndActivatePayment(payment.id);
   }
 
   /*
@@ -1520,9 +1258,435 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
+   * MANUAL PAYMENT VERIFICATION / RECONCILIATION
+   * POST /subscriptions/payments/:id/verify
+   * ============================================================
+   */
+
+  async verifySubscriptionPayment(userId: string, paymentId: string) {
+    /*
+     * Only the authenticated business owner can manually
+     * reconcile subscription payments.
+     */
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can verify subscription payments.',
+      );
+    }
+
+    /*
+     * Security:
+     *
+     * Payment ID alone must never allow access to another
+     * business's transaction.
+     */
+    const payment = await this.prisma.subscriptionPayment.findFirst({
+      where: {
+        id: paymentId,
+        businessId: membership.businessId,
+      },
+
+      select: {
+        id: true,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Subscription payment could not be found.');
+    }
+
+    return this.verifyAndActivatePayment(payment.id);
+  }
+
+  /*
+   * ============================================================
    * PRIVATE HELPERS
    * ============================================================
    */
+
+  private async verifyAndActivatePayment(paymentId: string) {
+    const payment = await this.prisma.subscriptionPayment.findUnique({
+      where: {
+        id: paymentId,
+      },
+
+      include: {
+        subscription: true,
+      },
+    });
+
+    if (!payment) {
+      throw new NotFoundException('Subscription payment could not be found.');
+    }
+
+    /*
+     * ============================================================
+     * IDEMPOTENCY — FAST PATH
+     * ============================================================
+     *
+     * If this transaction was already completed, never contact
+     * the provider or activate the subscription again.
+     */
+    if (payment.status === 'SUCCESSFUL') {
+      return {
+        message: 'Payment was already processed successfully.',
+
+        payment: {
+          id: payment.id,
+          reference: payment.reference,
+          plan: payment.plan,
+          billingPeriod: payment.billingPeriod,
+          status: payment.status,
+          amount: payment.amount.toString(),
+          currency: payment.currency,
+          paidAt: payment.paidAt,
+        },
+
+        subscription: {
+          id: payment.subscription.id,
+
+          plan: payment.subscription.plan,
+
+          status: payment.subscription.status,
+
+          startsAt: payment.subscription.startsAt,
+
+          endsAt: payment.subscription.endsAt,
+        },
+      };
+    }
+
+    /*
+     * Resolve the actual payment-provider adapter.
+     *
+     * Today this is PAYUNIT, but using the registry here means
+     * this reconciliation pipeline can later support Paystack,
+     * Stripe, dLocal, etc.
+     */
+    const adapter = this.paymentProviderRegistry.get(payment.provider);
+
+    /*
+     * Never trust the local status alone.
+     *
+     * Ask the payment provider for the authoritative status.
+     */
+    const verified = await adapter.verifyPayment({
+      reference: payment.reference,
+
+      providerReference: payment.providerReference,
+
+      providerTransactionId: payment.providerTransactionId,
+    });
+
+    /*
+     * ============================================================
+     * NOT SUCCESSFUL YET
+     * ============================================================
+     */
+
+    if (!verified.successful) {
+      const status = this.mapProviderPaymentStatus(verified.rawStatus);
+
+      const updatedPayment = await this.prisma.subscriptionPayment.update({
+        where: {
+          id: payment.id,
+        },
+
+        data: {
+          status,
+
+          providerTransactionId:
+            verified.providerTransactionId ?? payment.providerTransactionId,
+
+          providerReference:
+            verified.providerReference ?? payment.providerReference,
+
+          /*
+           * Preserve a useful local explanation for terminal
+           * provider states.
+           */
+          failureReason:
+            status === 'FAILED'
+              ? 'The payment provider reported that the transaction failed.'
+              : status === 'CANCELLED'
+                ? 'The payment provider reported that the transaction was cancelled.'
+                : null,
+        },
+
+        select: {
+          id: true,
+          reference: true,
+          status: true,
+          plan: true,
+          billingPeriod: true,
+          amount: true,
+          currency: true,
+          provider: true,
+          providerReference: true,
+          providerTransactionId: true,
+          paidAt: true,
+        },
+      });
+
+      return {
+        message:
+          status === 'FAILED'
+            ? 'Payment verification confirmed that the transaction failed.'
+            : status === 'CANCELLED'
+              ? 'Payment verification confirmed that the transaction was cancelled.'
+              : 'Payment has not yet been confirmed as successful.',
+
+        payment: {
+          ...updatedPayment,
+
+          amount: updatedPayment.amount.toString(),
+        },
+
+        subscription: null,
+      };
+    }
+
+    /*
+     * ============================================================
+     * SECURITY — VERIFY AMOUNT
+     * ============================================================
+     */
+
+    const expectedAmount = Number(payment.amount.toString());
+
+    const receivedAmount = Number(verified.amount);
+
+    if (
+      !Number.isFinite(receivedAmount) ||
+      Math.abs(receivedAmount - expectedAmount) > 0.000001
+    ) {
+      await this.prisma.subscriptionPayment.update({
+        where: {
+          id: payment.id,
+        },
+
+        data: {
+          status: 'FAILED',
+
+          failureReason:
+            `Verified amount mismatch. Expected ` +
+            `${payment.amount.toString()} ${payment.currency}, ` +
+            `received ${verified.amount} ${verified.currency}.`,
+        },
+      });
+
+      throw new ForbiddenException(
+        'Verified payment amount does not match the expected subscription amount.',
+      );
+    }
+
+    /*
+     * ============================================================
+     * SECURITY — VERIFY CURRENCY
+     * ============================================================
+     */
+
+    if (payment.currency.toUpperCase() !== verified.currency.toUpperCase()) {
+      await this.prisma.subscriptionPayment.update({
+        where: {
+          id: payment.id,
+        },
+
+        data: {
+          status: 'FAILED',
+
+          failureReason:
+            `Verified currency mismatch. Expected ` +
+            `${payment.currency}, received ${verified.currency}.`,
+        },
+      });
+
+      throw new ForbiddenException(
+        'Verified payment currency does not match the expected subscription currency.',
+      );
+    }
+
+    /*
+     * ============================================================
+     * SUBSCRIPTION PERIOD
+     * ============================================================
+     */
+
+    const startsAt = new Date();
+
+    const endsAt = this.calculateSubscriptionEndDate(
+      startsAt,
+      payment.billingPeriod,
+    );
+
+    /*
+     * ============================================================
+     * ATOMIC ACTIVATION
+     * ============================================================
+     *
+     * We re-read the payment inside the transaction.
+     *
+     * This protects against:
+     *
+     * - webhook + manual verify arriving simultaneously
+     * - two webhook deliveries
+     * - repeated user taps
+     * - mobile retries
+     */
+
+    const result = await this.prisma.$transaction(async (transaction) => {
+      const currentPayment = await transaction.subscriptionPayment.findUnique({
+        where: {
+          id: payment.id,
+        },
+      });
+
+      if (!currentPayment) {
+        throw new NotFoundException('Subscription payment could not be found.');
+      }
+
+      /*
+       * Another request may have completed this payment
+       * while provider verification was happening.
+       */
+      if (currentPayment.status === 'SUCCESSFUL') {
+        const currentSubscription = await transaction.subscription.findUnique({
+          where: {
+            id: currentPayment.subscriptionId,
+          },
+        });
+
+        return {
+          payment: currentPayment,
+
+          subscription: currentSubscription,
+
+          alreadyProcessed: true,
+        };
+      }
+
+      /*
+       * Mark transaction successful.
+       */
+      const completedPayment = await transaction.subscriptionPayment.update({
+        where: {
+          id: currentPayment.id,
+        },
+
+        data: {
+          status: 'SUCCESSFUL',
+
+          paidAt: startsAt,
+
+          failureReason: null,
+
+          providerTransactionId:
+            verified.providerTransactionId ??
+            currentPayment.providerTransactionId,
+
+          providerReference:
+            verified.providerReference ?? currentPayment.providerReference,
+        },
+      });
+
+      /*
+       * Activate exactly the plan associated with this
+       * particular payment.
+       */
+      const updatedSubscription = await transaction.subscription.update({
+        where: {
+          id: currentPayment.subscriptionId,
+        },
+
+        data: {
+          plan: currentPayment.plan,
+
+          status: 'ACTIVE',
+
+          startsAt,
+
+          endsAt,
+
+          /*
+           * A newly paid subscription supersedes any
+           * scheduled cancellation/downgrade.
+           */
+          scheduledPlan: null,
+
+          scheduledPlanAt: null,
+        },
+      });
+
+      return {
+        payment: completedPayment,
+
+        subscription: updatedSubscription,
+
+        alreadyProcessed: false,
+      };
+    });
+
+    return {
+      message: result.alreadyProcessed
+        ? 'Payment was already processed successfully.'
+        : 'Subscription payment verified and plan activated successfully.',
+
+      payment: {
+        id: result.payment.id,
+
+        reference: result.payment.reference,
+
+        plan: result.payment.plan,
+
+        billingPeriod: result.payment.billingPeriod,
+
+        status: result.payment.status,
+
+        amount: result.payment.amount.toString(),
+
+        currency: result.payment.currency,
+
+        paidAt: result.payment.paidAt,
+      },
+
+      subscription: result.subscription
+        ? {
+            id: result.subscription.id,
+
+            plan: result.subscription.plan,
+
+            status: result.subscription.status,
+
+            startsAt: result.subscription.startsAt,
+
+            endsAt: result.subscription.endsAt,
+          }
+        : null,
+    };
+  }
+
   private getPlanRank(plan: SubscriptionPlan): number {
     const ranks: Record<SubscriptionPlan, number> = {
       FREE: 0,
@@ -1557,17 +1721,23 @@ export class SubscriptionsService {
     return reference.trim();
   }
 
-  private mapPayUnitStatus(
+  private mapProviderPaymentStatus(
     status?: string | null,
   ): 'PROCESSING' | 'FAILED' | 'CANCELLED' {
     switch (status?.trim().toUpperCase()) {
       case 'FAILED':
+      case 'FAILURE':
+      case 'DECLINED':
+      case 'REJECTED':
         return 'FAILED';
 
       case 'CANCELLED':
+      case 'CANCELED':
         return 'CANCELLED';
 
       case 'PENDING':
+      case 'PROCESSING':
+      case 'INITIATED':
       default:
         return 'PROCESSING';
     }

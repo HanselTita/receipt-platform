@@ -216,4 +216,29 @@ export class SubscriptionsController {
   ) {
     return this.subscriptionsService.cancelScheduledPlanChange(user.sub);
   }
+
+  /*
+   * ============================================================
+   * MANUAL PAYMENT VERIFICATION
+   * ============================================================
+   *
+   * POST /subscriptions/payments/:id/verify
+   *
+   * Reconciles a pending/processing subscription payment
+   * directly with its payment provider.
+   */
+
+  @Post('payments/:id/verify')
+  verifySubscriptionPayment(
+    @CurrentUser()
+    user: AccessTokenPayload,
+
+    @Param('id')
+    paymentId: string,
+  ) {
+    return this.subscriptionsService.verifySubscriptionPayment(
+      user.sub,
+      paymentId,
+    );
+  }
 }

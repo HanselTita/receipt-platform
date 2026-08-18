@@ -1345,6 +1345,81 @@ export class SubscriptionsService {
     });
   }
 
+  async getPaymentHistory(userId: string) {
+    const membership = await this.prisma.businessMembership.findFirst({
+      where: {
+        userId,
+        status: 'ACTIVE',
+      },
+
+      orderBy: {
+        createdAt: 'asc',
+      },
+
+      select: {
+        role: true,
+        businessId: true,
+      },
+    });
+
+    if (!membership) {
+      throw new NotFoundException(
+        'You do not have an active business membership.',
+      );
+    }
+
+    if (membership.role !== 'OWNER') {
+      throw new ForbiddenException(
+        'Only the business owner can view subscription payment history.',
+      );
+    }
+
+    const payments = await this.prisma.subscriptionPayment.findMany({
+      where: {
+        businessId: membership.businessId,
+      },
+
+      orderBy: {
+        createdAt: 'desc',
+      },
+
+      select: {
+        id: true,
+        reference: true,
+
+        plan: true,
+        billingPeriod: true,
+
+        amount: true,
+        currency: true,
+
+        provider: true,
+        status: true,
+
+        providerReference: true,
+        providerTransactionId: true,
+
+        paidAt: true,
+        expiresAt: true,
+
+        createdAt: true,
+        updatedAt: true,
+      },
+    });
+
+    return {
+      payments: payments.map((payment) => ({
+        ...payment,
+
+        /*
+         * Prisma Decimal should not be exposed directly
+         * to the mobile application.
+         */
+        amount: payment.amount.toString(),
+      })),
+    };
+  }
+
   /*
    * ============================================================
    * PRIVATE HELPERS

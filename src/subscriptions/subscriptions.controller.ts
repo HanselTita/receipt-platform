@@ -55,6 +55,25 @@ export class SubscriptionsController {
 
   /*
    * ============================================================
+   * PAYMENT HISTORY
+   * ============================================================
+   *
+   * GET /subscriptions/payments
+   *
+   * Returns subscription payment attempts for the
+   * authenticated business owner, newest first.
+   */
+
+  @Get('payments')
+  getPaymentHistory(
+    @CurrentUser()
+    user: AccessTokenPayload,
+  ) {
+    return this.subscriptionsService.getPaymentHistory(user.sub);
+  }
+
+  /*
+   * ============================================================
    * PAID CHECKOUT
    * ============================================================
    *

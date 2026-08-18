@@ -35,10 +35,6 @@ export class SubscriptionsService {
    */
 
   async getBusinessSubscription(businessId: string) {
-    /*
-     * Apply any due subscription change before calculating
-     * the business's current limits.
-     */
     await this.applyScheduledPlanIfDue(businessId);
 
     const subscription = await this.prisma.subscription.findUnique({
@@ -47,10 +43,6 @@ export class SubscriptionsService {
       },
     });
 
-    /*
-     * Older businesses created before subscriptions existed
-     * are safely treated as FREE.
-     */
     if (!subscription) {
       return {
         id: null,
@@ -67,6 +59,7 @@ export class SubscriptionsService {
 
     return {
       ...subscription,
+
       limits: SUBSCRIPTION_PLAN_LIMITS[subscription.plan],
     };
   }
@@ -115,6 +108,13 @@ export class SubscriptionsService {
         'Only the business owner can view subscription information.',
       );
     }
+
+    /*
+     * Apply any scheduled cancellation/downgrade that
+     * has reached its effective date before returning
+     * subscription data to the mobile app.
+     */
+    await this.applyScheduledPlanIfDue(membership.businessId);
 
     const subscription = await this.getBusinessSubscription(
       membership.businessId,
@@ -1241,67 +1241,105 @@ export class SubscriptionsService {
       return null;
     }
 
-    if (!subscription.scheduledPlan || !subscription.scheduledPlanAt) {
-      return subscription;
-    }
-
     const now = new Date();
 
-    if (subscription.scheduledPlanAt.getTime() > now.getTime()) {
+    /*
+     * ============================================================
+     * FREE PLAN
+     * ============================================================
+     *
+     * FREE does not expire.
+     */
+    if (subscription.plan === 'FREE') {
+      /*
+       * Clean up any obsolete scheduled cancellation data.
+       */
+      if (
+        subscription.scheduledPlan === 'FREE' ||
+        (subscription.scheduledPlanAt &&
+          subscription.scheduledPlanAt.getTime() <= now.getTime())
+      ) {
+        return this.prisma.subscription.update({
+          where: {
+            id: subscription.id,
+          },
+
+          data: {
+            status: 'ACTIVE',
+            endsAt: null,
+            scheduledPlan: null,
+            scheduledPlanAt: null,
+          },
+        });
+      }
+
       return subscription;
     }
 
-    const scheduledPlan = subscription.scheduledPlan;
-
     /*
-     * Cancellation to FREE can be applied immediately once
-     * the already-paid billing period has ended.
+     * ============================================================
+     * ACTIVE PAID PERIOD
+     * ============================================================
+     *
+     * STARTER / BUSINESS / PRO remain active while endsAt
+     * is still in the future.
      */
-    if (scheduledPlan === 'FREE') {
-      return this.prisma.subscription.update({
-        where: {
-          id: subscription.id,
-        },
-
-        data: {
-          plan: 'FREE',
-          status: 'ACTIVE',
-
-          startsAt: now,
-          endsAt: null,
-
-          scheduledPlan: null,
-          scheduledPlanAt: null,
-        },
-      });
+    if (subscription.endsAt && subscription.endsAt.getTime() > now.getTime()) {
+      return subscription;
     }
 
     /*
-     * IMPORTANT:
+     * ============================================================
+     * EXPIRED PAID PLAN
+     * ============================================================
      *
-     * We must never activate another paid plan without a
-     * successful payment for its new billing period.
+     * At this point:
      *
-     * The old paid period has expired, so temporarily return
-     * the business to FREE while preserving the user's chosen
-     * paid plan as the intended next plan.
+     * - plan is STARTER / BUSINESS / PRO
+     * - endsAt is missing OR has passed
      *
-     * Later our renewal flow will initiate checkout for this
-     * scheduled paid plan.
+     * The business must no longer receive paid-plan access.
+     *
+     * We never automatically grant another paid period without
+     * confirmed payment.
      */
+
+    const intendedNextPlan =
+      subscription.scheduledPlan && subscription.scheduledPlan !== 'FREE'
+        ? subscription.scheduledPlan
+        : null;
+
     return this.prisma.subscription.update({
       where: {
         id: subscription.id,
       },
 
       data: {
+        /*
+         * Expired paid subscriptions fall back to FREE.
+         */
         plan: 'FREE',
+
+        /*
+         * FREE itself is an active SwiftReceipt tier.
+         */
         status: 'ACTIVE',
 
         startsAt: now,
         endsAt: null,
 
-        scheduledPlan,
+        /*
+         * Cancellation to FREE has now completed, so clear it.
+         *
+         * If the customer previously requested another paid plan,
+         * preserve that intention. It can later be activated only
+         * after successful payment.
+         */
+        scheduledPlan: intendedNextPlan,
+
+        /*
+         * The previous effective date has already passed.
+         */
         scheduledPlanAt: null,
       },
     });

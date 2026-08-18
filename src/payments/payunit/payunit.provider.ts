@@ -13,6 +13,12 @@ import type {
   VerifyPaymentInput,
 } from '../payment-provider.interface';
 
+/*
+ * ============================================================
+ * PAYUNIT INITIALIZE RESPONSE
+ * ============================================================
+ */
+
 type PayUnitInitializeResponse = {
   status?: string;
   statusCode?: number;
@@ -23,14 +29,33 @@ type PayUnitInitializeResponse = {
   };
 };
 
+/*
+ * ============================================================
+ * PAYUNIT STATUS RESPONSE
+ * ============================================================
+ */
+
+type PayUnitTransactionStatus =
+  | 'INITIATE'
+  | 'INITIATED'
+  | 'PENDING'
+  | 'PROCESSING'
+  | 'FAILED'
+  | 'CANCELLED'
+  | 'CANCELED'
+  | 'SUCCESS';
+
 type PayUnitStatusResponse = {
   status?: string;
+
   statusCode?: number;
+
   message?: string;
 
   data?: {
     transaction_amount?: number | string;
-    transaction_status?: 'PENDING' | 'FAILED' | 'CANCELLED' | 'SUCCESS';
+
+    transaction_status?: PayUnitTransactionStatus | string;
 
     transaction_id?: string;
 
@@ -39,7 +64,13 @@ type PayUnitStatusResponse = {
     transaction_gateway?: string | null;
 
     purchaseRef?: string | null;
-  };
+
+    notify_url?: string | null;
+
+    callback_url?: string | null;
+
+    message?: string | null;
+  } | null;
 };
 
 @Injectable()
@@ -47,6 +78,12 @@ export class PayUnitProvider implements PaymentProviderAdapter {
   private readonly baseUrl = 'https://gateway.payunit.net';
 
   constructor(private readonly configService: ConfigService) {}
+
+  /*
+   * ============================================================
+   * INITIALIZE PAYMENT
+   * ============================================================
+   */
 
   async initializePayment(
     input: InitializePaymentInput,
@@ -96,6 +133,12 @@ export class PayUnitProvider implements PaymentProviderAdapter {
 
             mode: 'payment',
 
+            /*
+             * This is SwiftReceipt's own transaction ID.
+             *
+             * PayUnit uses this same value later when querying
+             * /paymentstatus/:transactionID.
+             */
             transaction_id: input.reference,
 
             total_amount: amount,
@@ -109,12 +152,6 @@ export class PayUnitProvider implements PaymentProviderAdapter {
                 product_description: {
                   name: input.description,
 
-                  /*
-                   * PayUnit's checkout schema expects an image_url.
-                   *
-                   * Replace this later with SwiftReceipt's public
-                   * logo URL.
-                   */
                   image_url: 'https://via.placeholder.com/512',
 
                   about_product: input.description,
@@ -138,15 +175,13 @@ export class PayUnitProvider implements PaymentProviderAdapter {
       throw new BadGatewayException('Unable to connect to PayUnit.');
     }
 
-    let responseBody: PayUnitInitializeResponse | undefined;
+    const responseBody =
+      await this.readJsonResponse<PayUnitInitializeResponse>(response);
 
-    try {
-      responseBody = (await response.json()) as PayUnitInitializeResponse;
-    } catch {
-      responseBody = undefined;
-    }
-
-    if (!response.ok || responseBody?.status !== 'SUCCESS') {
+    if (
+      !response.ok ||
+      responseBody?.status?.trim().toUpperCase() !== 'SUCCESS'
+    ) {
       console.error('PayUnit initialization failed:', responseBody);
 
       throw new BadGatewayException(
@@ -157,24 +192,45 @@ export class PayUnitProvider implements PaymentProviderAdapter {
     const checkoutUrl = responseBody.data?.redirect;
 
     if (!checkoutUrl) {
+      console.error(
+        'PayUnit initialization response contained no redirect URL:',
+        responseBody,
+      );
+
       throw new BadGatewayException('PayUnit did not return a checkout URL.');
     }
 
     return {
       checkoutUrl,
 
+      /*
+       * SwiftReceipt's reference is also PayUnit's transaction ID
+       * because we supplied it as transaction_id at initialization.
+       */
       providerReference: input.reference,
 
       providerTransactionId: null,
     };
   }
 
+  /*
+   * ============================================================
+   * VERIFY PAYMENT
+   * ============================================================
+   */
+
   async verifyPayment(
     input: VerifyPaymentInput,
   ): Promise<VerifiedPaymentResult> {
     const credentials = this.getCredentials();
 
-    const transactionId = input.providerReference ?? input.reference;
+    /*
+     * PayUnit's payment-status endpoint expects the transaction_id
+     * supplied when the payment was initialized.
+     *
+     * In SwiftReceipt that is input.reference.
+     */
+    const transactionId = input.reference;
 
     let response: Response;
 
@@ -205,38 +261,159 @@ export class PayUnitProvider implements PaymentProviderAdapter {
       throw new BadGatewayException('Unable to verify payment with PayUnit.');
     }
 
-    let responseBody: PayUnitStatusResponse | undefined;
+    const responseBody =
+      await this.readJsonResponse<PayUnitStatusResponse>(response);
 
-    try {
-      responseBody = (await response.json()) as PayUnitStatusResponse;
-    } catch {
-      responseBody = undefined;
-    }
+    /*
+     * Keep this log while integration/KYC testing is ongoing.
+     *
+     * It will show us the exact PayUnit payload without exposing
+     * your API credentials.
+     */
+    console.log(
+      'PAYUNIT PAYMENT STATUS RESPONSE:',
+      JSON.stringify(responseBody, null, 2),
+    );
 
-    if (!response.ok || !responseBody?.data) {
-      console.error('PayUnit verification failed:', responseBody);
+    /*
+     * HTTP-level failure means PayUnit could not process the
+     * verification request itself.
+     */
+    if (!response.ok) {
+      console.error(
+        'PayUnit status HTTP failure:',
+        response.status,
+        responseBody,
+      );
 
       throw new BadGatewayException(
-        responseBody?.message || 'Unable to verify PayUnit payment.',
+        responseBody?.message ||
+          `PayUnit payment verification failed with HTTP ${response.status}.`,
       );
     }
 
-    const status = responseBody.data.transaction_status;
+    /*
+     * PayUnit normally returns:
+     *
+     * {
+     *   status: "SUCCESS",
+     *   statusCode: 200,
+     *   message: "...",
+     *   data: {
+     *     transaction_status: "PENDING|FAILED|CANCELLED|SUCCESS",
+     *     ...
+     *   }
+     * }
+     *
+     * Top-level SUCCESS means the status request itself succeeded.
+     * It does NOT mean the customer payment succeeded.
+     */
+    const requestStatus = responseBody?.status?.trim().toUpperCase();
+
+    if (requestStatus && requestStatus !== 'SUCCESS') {
+      console.error('PayUnit status request rejected:', responseBody);
+
+      throw new BadGatewayException(
+        responseBody?.message ||
+          'PayUnit rejected the payment verification request.',
+      );
+    }
+
+    /*
+     * Important:
+     *
+     * A successful PayUnit API request can still return no usable
+     * transaction data, particularly while a transaction/application
+     * is not fully available for processing.
+     *
+     * Do not convert the top-level message "Request Successful"
+     * into an exception.
+     *
+     * Treat this as unresolved/PROCESSING instead.
+     */
+    if (!responseBody?.data) {
+      console.warn(
+        'PayUnit payment-status request succeeded but returned no transaction data:',
+        responseBody,
+      );
+
+      return {
+        successful: false,
+
+        amount: '0',
+
+        currency: '',
+
+        providerTransactionId: input.providerTransactionId ?? null,
+
+        providerReference: input.providerReference ?? input.reference,
+
+        rawStatus: 'PENDING',
+      };
+    }
+
+    const data = responseBody.data;
+
+    const rawStatus =
+      data.transaction_status?.trim().toUpperCase() ?? 'PENDING';
+
+    /*
+     * PayUnit transaction success must be determined exclusively
+     * from data.transaction_status.
+     */
+    const successful = rawStatus === 'SUCCESS';
+
+    const amount =
+      data.transaction_amount !== undefined && data.transaction_amount !== null
+        ? String(data.transaction_amount)
+        : '0';
+
+    const currency = data.transaction_currency?.trim().toUpperCase() ?? '';
 
     return {
-      successful: status === 'SUCCESS',
+      successful,
 
-      amount: String(responseBody.data.transaction_amount ?? '0'),
+      amount,
 
-      currency: responseBody.data.transaction_currency ?? '',
+      currency,
 
-      providerTransactionId: responseBody.data.transaction_id ?? null,
+      /*
+       * PayUnit documents transaction_id as the merchant's
+       * transaction identifier. Preserve it when returned.
+       */
+      providerTransactionId:
+        data.transaction_id ?? input.providerTransactionId ?? null,
 
-      providerReference: input.reference,
+      providerReference:
+        data.purchaseRef ?? input.providerReference ?? input.reference,
 
-      rawStatus: status ?? null,
+      rawStatus,
     };
   }
+
+  /*
+   * ============================================================
+   * READ JSON RESPONSE
+   * ============================================================
+   */
+
+  private async readJsonResponse<T>(
+    response: Response,
+  ): Promise<T | undefined> {
+    try {
+      return (await response.json()) as T;
+    } catch (error) {
+      console.error('PayUnit returned a non-JSON response:', error);
+
+      return undefined;
+    }
+  }
+
+  /*
+   * ============================================================
+   * CREDENTIALS
+   * ============================================================
+   */
 
   private getCredentials() {
     const apiUser = this.getRequiredConfig('PAYUNIT_API_USER');
@@ -261,6 +438,12 @@ export class PayUnitProvider implements PaymentProviderAdapter {
       mode,
     };
   }
+
+  /*
+   * ============================================================
+   * REQUIRED CONFIG
+   * ============================================================
+   */
 
   private getRequiredConfig(name: string): string {
     const value = this.configService.get<string>(name);

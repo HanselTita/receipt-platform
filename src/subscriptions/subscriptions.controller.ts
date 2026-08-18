@@ -1,4 +1,14 @@
-import { Body, Controller, Get, Param, Post, UseGuards } from '@nestjs/common';
+import {
+  Body,
+  Controller,
+  Get,
+  Param,
+  Post,
+  Res,
+  UseGuards,
+} from '@nestjs/common';
+
+import type { Response } from 'express';
 
 import { CurrentUser } from '../auth/decorators/current-user.decorator';
 import { JwtAuthGuard } from '../auth/guards/jwt-auth.guard';
@@ -8,10 +18,16 @@ import { CreateSubscriptionCheckoutDto } from './dto/create-subscription-checkou
 import { ScheduleSubscriptionPlanChangeDto } from './dto/schedule-subscription-plan-change.dto';
 import { SubscriptionsService } from './subscriptions.service';
 
+import { SubscriptionReceiptService } from './subscription-receipt.service';
+
 @Controller('subscriptions')
 @UseGuards(JwtAuthGuard)
 export class SubscriptionsController {
-  constructor(private readonly subscriptionsService: SubscriptionsService) {}
+  constructor(
+    private readonly subscriptionsService: SubscriptionsService,
+
+    private readonly subscriptionReceiptService: SubscriptionReceiptService,
+  ) {}
 
   /*
    * ============================================================
@@ -92,6 +108,43 @@ export class SubscriptionsController {
     paymentId: string,
   ) {
     return this.subscriptionsService.getPaymentDetails(user.sub, paymentId);
+  }
+
+  /*
+   * ============================================================
+   * SUBSCRIPTION PAYMENT RECEIPT
+   * ============================================================
+   *
+   * GET /subscriptions/payments/:id/receipt
+   *
+   * Returns a PDF only for a verified successful payment.
+   */
+
+  @Get('payments/:id/receipt')
+  async getPaymentReceipt(
+    @CurrentUser()
+    user: AccessTokenPayload,
+
+    @Param('id')
+    paymentId: string,
+
+    @Res()
+    response: Response,
+  ) {
+    const pdf = await this.subscriptionReceiptService.generateReceipt(
+      user.sub,
+      paymentId,
+    );
+
+    response.set({
+      'Content-Type': 'application/pdf',
+
+      'Content-Disposition': `attachment; filename="swiftreceipt-subscription-${paymentId}.pdf"`,
+
+      'Content-Length': pdf.length,
+    });
+
+    response.end(pdf);
   }
 
   /*

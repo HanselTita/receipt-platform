@@ -5,6 +5,7 @@ import { PaymentsModule } from '../payments/payments.module';
 import { PrismaModule } from '../prisma/prisma.module';
 
 import { SubscriptionPaymentsController } from './subscription-payments.controller';
+import { SubscriptionReceiptService } from './subscription-receipt.service';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsService } from './subscriptions.service';
 
@@ -13,7 +14,7 @@ import { SubscriptionsService } from './subscriptions.service';
 
   controllers: [SubscriptionsController, SubscriptionPaymentsController],
 
-  providers: [SubscriptionsService],
+  providers: [SubscriptionsService, SubscriptionReceiptService],
 
   exports: [SubscriptionsService],
 })

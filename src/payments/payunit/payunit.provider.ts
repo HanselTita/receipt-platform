@@ -170,7 +170,11 @@ export class PayUnitProvider implements PaymentProviderAdapter {
         },
       );
     } catch (error) {
-      console.error('PayUnit initialization network error:', error);
+      console.error('PayUnit initialization network error', {
+        reference: input.reference,
+        message:
+          error instanceof Error ? error.message : 'Unknown network error',
+      });
 
       throw new BadGatewayException('Unable to connect to PayUnit.');
     }
@@ -182,7 +186,12 @@ export class PayUnitProvider implements PaymentProviderAdapter {
       !response.ok ||
       responseBody?.status?.trim().toUpperCase() !== 'SUCCESS'
     ) {
-      console.error('PayUnit initialization failed:', responseBody);
+      console.error('PayUnit initialization failed', {
+        reference: input.reference,
+        status: responseBody?.status ?? null,
+        statusCode: responseBody?.statusCode ?? null,
+        message: responseBody?.message ?? null,
+      });
 
       throw new BadGatewayException(
         responseBody?.message || 'Unable to initialize PayUnit payment.',
@@ -256,7 +265,11 @@ export class PayUnitProvider implements PaymentProviderAdapter {
         },
       );
     } catch (error) {
-      console.error('PayUnit verification network error:', error);
+      console.error('PayUnit verification network error', {
+        transactionId,
+        message:
+          error instanceof Error ? error.message : 'Unknown network error',
+      });
 
       throw new BadGatewayException('Unable to verify payment with PayUnit.');
     }
@@ -270,22 +283,23 @@ export class PayUnitProvider implements PaymentProviderAdapter {
      * It will show us the exact PayUnit payload without exposing
      * your API credentials.
      */
-    console.log(
-      'PAYUNIT PAYMENT STATUS RESPONSE:',
-      JSON.stringify(responseBody, null, 2),
-    );
-
+    console.log('PayUnit verification response', {
+      transactionId,
+      requestStatus: responseBody?.status ?? null,
+      transactionStatus: responseBody?.data?.transaction_status ?? null,
+    });
     /*
      * HTTP-level failure means PayUnit could not process the
      * verification request itself.
      */
     if (!response.ok) {
-      console.error(
-        'PayUnit status HTTP failure:',
-        response.status,
-        responseBody,
-      );
-
+      console.error('PayUnit status HTTP failure', {
+        transactionId,
+        httpStatus: response.status,
+        providerStatus: responseBody?.status ?? null,
+        providerStatusCode: responseBody?.statusCode ?? null,
+        message: responseBody?.message ?? null,
+      });
       throw new BadGatewayException(
         responseBody?.message ||
           `PayUnit payment verification failed with HTTP ${response.status}.`,

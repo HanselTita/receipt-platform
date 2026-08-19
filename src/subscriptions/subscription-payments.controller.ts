@@ -5,7 +5,10 @@ import {
   HttpCode,
   HttpStatus,
   Post,
+  UseGuards,
 } from '@nestjs/common';
+
+import { Throttle, ThrottlerGuard } from '@nestjs/throttler';
 
 import { SubscriptionsService } from './subscriptions.service';
 
@@ -14,25 +17,40 @@ export class SubscriptionPaymentsController {
   constructor(private readonly subscriptionsService: SubscriptionsService) {}
 
   /*
-   * PayUnit server-to-server notification.
+   * ============================================================
+   * PAYUNIT WEBHOOK
+   * ============================================================
    *
-   * This route intentionally does not use JwtAuthGuard.
-   * We independently verify the transaction with PayUnit
-   * before activating any subscription.
+   * Public server-to-server route.
+   *
+   * It does NOT trust the notification as proof of payment.
+   * The transaction is independently verified with PayUnit
+   * before any subscription is activated.
    */
+
   @Post('payunit/notify')
   @HttpCode(HttpStatus.OK)
-  notifyPayUnit(@Body() payload: unknown) {
+  @UseGuards(ThrottlerGuard)
+  @Throttle({
+    default: {
+      limit: 30,
+      ttl: 60_000,
+    },
+  })
+  notifyPayUnit(
+    @Body()
+    payload: unknown,
+  ) {
     return this.subscriptionsService.processPayUnitNotification(payload);
   }
-
   /*
-   * PayUnit redirects the customer here after a successful
-   * checkout.
+   * ============================================================
+   * PAYUNIT SUCCESS REDIRECT
+   * ============================================================
    *
-   * This endpoint does NOT activate the subscription.
-   * Activation happens only after server-side verification.
+   * This route does NOT activate a subscription.
    */
+
   @Get('payunit/success')
   @HttpCode(HttpStatus.OK)
   paymentSuccess() {
@@ -43,9 +61,11 @@ export class SubscriptionPaymentsController {
   }
 
   /*
-   * PayUnit redirects the customer here when checkout
-   * is cancelled.
+   * ============================================================
+   * PAYUNIT CANCEL REDIRECT
+   * ============================================================
    */
+
   @Get('payunit/cancel')
   @HttpCode(HttpStatus.OK)
   paymentCancelled() {

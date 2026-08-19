@@ -17,6 +17,7 @@ import { BranchesModule } from './branches/branches.module';
 import { TeamModule } from './team/team.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { ScheduleModule } from '@nestjs/schedule';
+import { ThrottlerModule } from '@nestjs/throttler';
 
 @Module({
   imports: [
@@ -24,6 +25,13 @@ import { ScheduleModule } from '@nestjs/schedule';
     ConfigModule.forRoot({
       isGlobal: true,
     }),
+
+    ThrottlerModule.forRoot([
+      {
+        ttl: 60_000,
+        limit: 60,
+      },
+    ]),
 
     ServeStaticModule.forRoot({
       rootPath: join(process.cwd(), 'uploads'),

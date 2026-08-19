@@ -170,6 +170,10 @@ export class SubscriptionReconciliationScheduler {
           );
 
           if (error instanceof Error) {
+            this.logger.debug(`Payment ${payment.reference}: ${error.message}`);
+          }
+
+          if (error instanceof Error) {
             this.logger.debug(error.message);
           }
         }

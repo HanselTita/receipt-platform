@@ -1432,7 +1432,11 @@ export class SubscriptionsService {
   async expirePendingPayments(businessId: string) {
     const now = new Date();
 
-    const result = await this.prisma.subscriptionPayment.updateMany({
+    /*
+     * Find the individual payments first so we can create
+     * an audit event for each successful expiry transition.
+     */
+    const payments = await this.prisma.subscriptionPayment.findMany({
       where: {
         businessId,
 
@@ -1442,23 +1446,91 @@ export class SubscriptionsService {
 
         expiresAt: {
           not: null,
-
           lte: now,
         },
       },
 
-      data: {
-        status: 'CANCELLED',
-
-        failureReason: 'Checkout expired before payment was confirmed.',
+      select: {
+        id: true,
+        reference: true,
+        businessId: true,
+        subscriptionId: true,
+        plan: true,
+        billingPeriod: true,
+        amount: true,
+        currency: true,
+        provider: true,
+        expiresAt: true,
       },
     });
 
+    let expiredPayments = 0;
+
+    for (const payment of payments) {
+      /*
+       * Conditional update prevents duplicate expiry handling if
+       * another request/scheduler changes the payment concurrently.
+       */
+      const transition = await this.prisma.subscriptionPayment.updateMany({
+        where: {
+          id: payment.id,
+
+          status: {
+            in: ['PENDING', 'PROCESSING'],
+          },
+
+          expiresAt: {
+            not: null,
+            lte: now,
+          },
+        },
+
+        data: {
+          status: 'CANCELLED',
+
+          failureReason: 'Checkout expired before payment was confirmed.',
+        },
+      });
+
+      if (transition.count === 0) {
+        continue;
+      }
+
+      expiredPayments += 1;
+
+      await this.subscriptionAuditService.record({
+        eventType: 'PAYMENT_EXPIRED',
+
+        businessId: payment.businessId,
+
+        subscriptionId: payment.subscriptionId,
+
+        paymentId: payment.id,
+
+        message: `Subscription payment ${payment.reference} expired before payment was confirmed.`,
+
+        metadata: {
+          reference: payment.reference,
+
+          plan: payment.plan,
+
+          billingPeriod: payment.billingPeriod,
+
+          amount: payment.amount.toString(),
+
+          currency: payment.currency,
+
+          provider: payment.provider,
+
+          expiresAt: payment.expiresAt?.toISOString() ?? null,
+        },
+      });
+    }
+
     return {
-      expiredPayments: result.count,
+      expiredPayments,
     };
   }
-
   /*
    * ============================================================
    * RETRY PAYMENT

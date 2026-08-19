@@ -10,6 +10,7 @@ import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsService } from './subscriptions.service';
 
 import { SubscriptionReconciliationScheduler } from './subscription-reconciliation.scheduler';
+import { SubscriptionAuditService } from './subscription-audit.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, PaymentsModule],
@@ -20,6 +21,7 @@ import { SubscriptionReconciliationScheduler } from './subscription-reconciliati
     SubscriptionsService,
     SubscriptionReceiptService,
     SubscriptionReconciliationScheduler,
+    SubscriptionAuditService,
   ],
 
   exports: [SubscriptionsService],

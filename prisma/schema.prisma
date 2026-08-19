@@ -23,12 +23,13 @@ model Business {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
-  branches             Branch[]
-  memberships          BusinessMembership[]
-  receipts             Receipt[]
-  customers            Customer[]
-  subscription         Subscription?
-  subscriptionPayments SubscriptionPayment[]
+  branches                Branch[]
+  memberships             BusinessMembership[]
+  receipts                Receipt[]
+  customers               Customer[]
+  subscription            Subscription?
+  subscriptionPayments    SubscriptionPayment[]
+  subscriptionAuditEvents SubscriptionAuditEvent[]
 }
 
 model Branch {
@@ -82,9 +83,10 @@ model User {
   authSessions                  AuthSession[]
   createdReceipts               Receipt[]
   createdCustomers              Customer[]
-  voidedReceipts                Receipt[]             @relation("VoidedReceipts")
-  correctedReceipts             Receipt[]             @relation("CorrectedByUser")
-  initiatedSubscriptionPayments SubscriptionPayment[] @relation("SubscriptionPaymentsInitiatedBy")
+  voidedReceipts                Receipt[]                @relation("VoidedReceipts")
+  correctedReceipts             Receipt[]                @relation("CorrectedByUser")
+  initiatedSubscriptionPayments SubscriptionPayment[]    @relation("SubscriptionPaymentsInitiatedBy")
+  subscriptionAuditEvents       SubscriptionAuditEvent[] @relation("SubscriptionAuditActor")
 }
 
 model BusinessMembership {
@@ -299,6 +301,26 @@ enum PaymentProvider {
   FLUTTERWAVE
 }
 
+enum SubscriptionAuditEventType {
+  CHECKOUT_CREATED
+  CHECKOUT_RETRIED
+
+  PAYMENT_PROCESSING
+  PAYMENT_SUCCESSFUL
+  PAYMENT_FAILED
+  PAYMENT_CANCELLED
+  PAYMENT_EXPIRED
+
+  SUBSCRIPTION_ACTIVATED
+  SUBSCRIPTION_RENEWED
+  SUBSCRIPTION_CHANGED
+  SUBSCRIPTION_EXPIRED
+  SUBSCRIPTION_DOWNGRADED
+
+  SCHEDULED_CHANGE_CREATED
+  SCHEDULED_CHANGE_CANCELLED
+}
+
 model Subscription {
   id     String             @id @default(uuid())
   plan   SubscriptionPlan   @default(FREE)
@@ -316,7 +338,8 @@ model Subscription {
   businessId String   @unique
   business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
 
-  payments SubscriptionPayment[]
+  payments    SubscriptionPayment[]
+  auditEvents SubscriptionAuditEvent[]
 }
 
 model SubscriptionPayment {
@@ -354,6 +377,8 @@ model SubscriptionPayment {
   initiatedByUserId String?
   initiatedByUser   User?   @relation("SubscriptionPaymentsInitiatedBy", fields: [initiatedByUserId], references: [id], onDelete: SetNull)
 
+  auditEvents SubscriptionAuditEvent[]
+
   @@index([businessId])
   @@index([subscriptionId])
   @@index([initiatedByUserId])
@@ -361,4 +386,34 @@ model SubscriptionPayment {
   @@index([provider])
   @@index([createdAt])
   @@index([providerTransactionId])
+}
+
+model SubscriptionAuditEvent {
+  id String @id @default(uuid())
+
+  eventType SubscriptionAuditEventType
+
+  message  String
+  metadata Json?
+
+  createdAt DateTime @default(now())
+
+  businessId String
+  business   Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  subscriptionId String?
+  subscription   Subscription? @relation(fields: [subscriptionId], references: [id], onDelete: SetNull)
+
+  paymentId String?
+  payment   SubscriptionPayment? @relation(fields: [paymentId], references: [id], onDelete: SetNull)
+
+  actorUserId String?
+  actorUser   User?   @relation("SubscriptionAuditActor", fields: [actorUserId], references: [id], onDelete: SetNull)
+
+  @@index([businessId])
+  @@index([subscriptionId])
+  @@index([paymentId])
+  @@index([actorUserId])
+  @@index([eventType])
+  @@index([createdAt])
 }

@@ -13,6 +13,7 @@ import type {
 import { PaymentProviderRegistry } from '../payments/payment-provider.registry';
 import { PrismaService } from '../prisma/prisma.service';
 
+import { SubscriptionAuditService } from './subscription-audit.service';
 import { SUBSCRIPTION_PLAN_METADATA } from './subscription-plan-catalog';
 import { SUBSCRIPTION_PLAN_LIMITS } from './subscription-plans';
 import {
@@ -25,7 +26,10 @@ import {
 export class SubscriptionsService {
   constructor(
     private readonly prisma: PrismaService,
+
     private readonly paymentProviderRegistry: PaymentProviderRegistry,
+
+    private readonly subscriptionAuditService: SubscriptionAuditService,
   ) {}
 
   /*
@@ -46,13 +50,21 @@ export class SubscriptionsService {
     if (!subscription) {
       return {
         id: null,
+
         businessId,
+
         plan: 'FREE' as const,
+
         status: 'ACTIVE' as const,
+
         startsAt: null,
+
         endsAt: null,
+
         scheduledPlan: null,
+
         scheduledPlanAt: null,
+
         limits: SUBSCRIPTION_PLAN_LIMITS.FREE,
       };
     }
@@ -75,6 +87,7 @@ export class SubscriptionsService {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -84,13 +97,17 @@ export class SubscriptionsService {
 
       select: {
         id: true,
+
         role: true,
+
         businessId: true,
 
         business: {
           select: {
             id: true,
+
             businessName: true,
+
             defaultCurrency: true,
           },
         },
@@ -109,11 +126,6 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Apply any scheduled cancellation/downgrade that
-     * has reached its effective date before returning
-     * subscription data to the mobile app.
-     */
     await this.applyScheduledPlanIfDue(membership.businessId);
 
     const subscription = await this.getBusinessSubscription(
@@ -126,14 +138,12 @@ export class SubscriptionsService {
 
     const nextMonthStart = new Date(now.getFullYear(), now.getMonth() + 1, 1);
 
-    /*
-     * Calculate current subscription usage.
-     */
     const [branches, staff, receiptsThisMonth] = await this.prisma.$transaction(
       [
         this.prisma.branch.count({
           where: {
             businessId: membership.businessId,
+
             isActive: true,
           },
         }),
@@ -141,6 +151,7 @@ export class SubscriptionsService {
         this.prisma.businessMembership.count({
           where: {
             businessId: membership.businessId,
+
             status: 'ACTIVE',
 
             role: {
@@ -155,6 +166,7 @@ export class SubscriptionsService {
 
             issuedAt: {
               gte: monthStart,
+
               lt: nextMonthStart,
             },
           },
@@ -184,11 +196,17 @@ export class SubscriptionsService {
 
       subscription: {
         id: subscription.id,
+
         plan: subscription.plan,
+
         status: subscription.status,
+
         startsAt: subscription.startsAt,
+
         endsAt: subscription.endsAt,
+
         scheduledPlan: subscription.scheduledPlan ?? null,
+
         scheduledPlanAt: subscription.scheduledPlanAt ?? null,
       },
 
@@ -196,7 +214,9 @@ export class SubscriptionsService {
 
       usage: {
         branches,
+
         staff,
+
         receiptsThisMonth,
       },
 
@@ -204,6 +224,7 @@ export class SubscriptionsService {
 
       billingPeriod: {
         monthStart,
+
         nextMonthStart,
       },
     };
@@ -237,6 +258,7 @@ export class SubscriptionsService {
     const branchCount = await this.prisma.branch.count({
       where: {
         businessId,
+
         isActive: true,
       },
     });
@@ -262,6 +284,7 @@ export class SubscriptionsService {
     const staffCount = await this.prisma.businessMembership.count({
       where: {
         businessId,
+
         status: 'ACTIVE',
 
         role: {
@@ -300,6 +323,7 @@ export class SubscriptionsService {
 
         issuedAt: {
           gte: monthStart,
+
           lt: nextMonthStart,
         },
       },
@@ -324,7 +348,7 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * SUBSCRIPTION PLAN CATALOGUE
+   * AVAILABLE PLAN CATALOGUE
    * GET /subscriptions/plans
    * ============================================================
    */
@@ -333,6 +357,7 @@ export class SubscriptionsService {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -411,15 +436,15 @@ export class SubscriptionsService {
 
   async createCheckout(
     userId: string,
+
     plan: SubscriptionPlan,
+
     billingPeriod: SubscriptionBillingPeriod,
   ) {
-    /*
-     * Load owner, business and main branch.
-     */
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -429,15 +454,21 @@ export class SubscriptionsService {
 
       select: {
         id: true,
+
         role: true,
+
         businessId: true,
 
         user: {
           select: {
             id: true,
+
             firstName: true,
+
             lastName: true,
+
             email: true,
+
             phone: true,
           },
         },
@@ -445,6 +476,7 @@ export class SubscriptionsService {
         business: {
           select: {
             id: true,
+
             businessName: true,
 
             branches: {
@@ -505,16 +537,10 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Determine pricing market.
-     */
     const mainBranch = membership.business.branches[0];
 
     const market = this.resolvePricingMarket(mainBranch?.country);
 
-    /*
-     * Obtain backend-controlled pricing.
-     */
     const pricing = getSubscriptionPricing(market, plan);
 
     const amount =
@@ -526,10 +552,6 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * PayUnit is currently our first implemented
-     * payment provider and is enabled for Cameroon.
-     */
     if (market !== 'CM') {
       throw new ForbiddenException(
         'Online subscription payments are not yet available for this country.',
@@ -541,13 +563,13 @@ export class SubscriptionsService {
     const reference = this.generatePaymentReference();
 
     /*
-     * PayUnit hosted checkout is short-lived.
+     * Hosted checkout lifetime.
      */
     const expiresAt = new Date(Date.now() + 15 * 60 * 1000);
 
     /*
-     * Create internal SwiftReceipt payment before
-     * contacting PayUnit.
+     * Create the SwiftReceipt payment record before contacting
+     * the external provider.
      */
     const payment = await this.prisma.subscriptionPayment.create({
       data: {
@@ -576,25 +598,34 @@ export class SubscriptionsService {
 
       select: {
         id: true,
+
         reference: true,
+
         plan: true,
+
         billingPeriod: true,
+
         amount: true,
+
         currency: true,
+
         provider: true,
+
         status: true,
+
         checkoutUrl: true,
+
         providerReference: true,
+
         providerTransactionId: true,
+
         expiresAt: true,
+
         createdAt: true,
       },
     });
 
     try {
-      /*
-       * Resolve PayUnit through our provider registry.
-       */
       const adapter = this.paymentProviderRegistry.get(provider);
 
       const initialized = await adapter.initializePayment({
@@ -623,9 +654,6 @@ export class SubscriptionsService {
         },
       });
 
-      /*
-       * Save provider checkout information.
-       */
       const updatedPayment = await this.prisma.subscriptionPayment.update({
         where: {
           id: payment.id,
@@ -643,18 +671,64 @@ export class SubscriptionsService {
 
         select: {
           id: true,
+
           reference: true,
+
           plan: true,
+
           billingPeriod: true,
+
           amount: true,
+
           currency: true,
+
           provider: true,
+
           status: true,
+
           checkoutUrl: true,
+
           providerReference: true,
+
           providerTransactionId: true,
+
           expiresAt: true,
+
           createdAt: true,
+        },
+      });
+
+      /*
+       * ========================================================
+       * AUDIT — CHECKOUT CREATED
+       * ========================================================
+       */
+
+      await this.subscriptionAuditService.record({
+        eventType: 'CHECKOUT_CREATED',
+
+        businessId: membership.businessId,
+
+        subscriptionId: subscription.id,
+
+        paymentId: updatedPayment.id,
+
+        actorUserId: userId,
+
+        message: `Subscription checkout created for ${plan} (${billingPeriod}).`,
+
+        metadata: {
+          plan,
+
+          billingPeriod,
+
+          reference: updatedPayment.reference,
+
+          amount: updatedPayment.amount.toString(),
+
+          currency: updatedPayment.currency,
+
+          provider: updatedPayment.provider,
         },
       });
 
@@ -676,9 +750,6 @@ export class SubscriptionsService {
         },
       };
     } catch (error) {
-      /*
-       * Preserve failed initialization for audit/debugging.
-       */
       await this.prisma.subscriptionPayment.update({
         where: {
           id: payment.id,
@@ -700,15 +771,11 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * PAYUNIT NOTIFICATION / VERIFICATION
+   * PAYUNIT NOTIFICATION
    * ============================================================
    */
 
   async processPayUnitNotification(payload: unknown) {
-    /*
-     * Extract SwiftReceipt's internal payment reference from
-     * the PayUnit notification.
-     */
     const reference = this.extractPayUnitReference(payload);
 
     const payment = await this.prisma.subscriptionPayment.findUnique({
@@ -718,6 +785,7 @@ export class SubscriptionsService {
 
       select: {
         id: true,
+
         provider: true,
       },
     });
@@ -732,23 +800,24 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Webhook and manual reconciliation deliberately use the
-     * exact same verification/activation pipeline.
-     */
     return this.verifyAndActivatePayment(payment.id);
   }
 
   /*
    * ============================================================
-   * SCHEDULE SUBSCRIPTION PLAN CHANGE
+   * SCHEDULE PLAN CHANGE
    * ============================================================
    */
 
-  async schedulePlanChange(userId: string, targetPlan: SubscriptionPlan) {
+  async schedulePlanChange(
+    userId: string,
+
+    targetPlan: SubscriptionPlan,
+  ) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -758,11 +827,13 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
 
         business: {
           select: {
             id: true,
+
             businessName: true,
           },
         },
@@ -807,18 +878,12 @@ export class SubscriptionsService {
 
     const targetRank = this.getPlanRank(targetPlan);
 
-    /*
-     * Upgrades must go through checkout.
-     */
     if (targetRank > currentRank) {
       throw new ForbiddenException(
         'Upgrades must be completed through subscription checkout.',
       );
     }
 
-    /*
-     * FREE subscriptions have no paid period to finish.
-     */
     if (subscription.plan === 'FREE') {
       throw new ForbiddenException('The FREE plan cannot be downgraded.');
     }
@@ -829,9 +894,6 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Do not schedule against an already expired period.
-     */
     if (subscription.endsAt.getTime() <= Date.now()) {
       throw new ForbiddenException(
         'The current subscription period has already ended.',
@@ -845,6 +907,7 @@ export class SubscriptionsService {
 
       data: {
         scheduledPlan: targetPlan,
+
         scheduledPlanAt: subscription.endsAt,
       },
     });
@@ -859,9 +922,13 @@ export class SubscriptionsService {
 
       subscription: {
         id: updatedSubscription.id,
+
         plan: updatedSubscription.plan,
+
         status: updatedSubscription.status,
+
         startsAt: updatedSubscription.startsAt,
+
         endsAt: updatedSubscription.endsAt,
 
         scheduledPlan: updatedSubscription.scheduledPlan,
@@ -873,7 +940,7 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * CANCEL SCHEDULED PLAN CHANGE
+   * CANCEL SCHEDULED CHANGE
    * ============================================================
    */
 
@@ -881,6 +948,7 @@ export class SubscriptionsService {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -890,11 +958,13 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
 
         business: {
           select: {
             id: true,
+
             businessName: true,
           },
         },
@@ -938,6 +1008,7 @@ export class SubscriptionsService {
 
       data: {
         scheduledPlan: null,
+
         scheduledPlanAt: null,
       },
     });
@@ -953,11 +1024,17 @@ export class SubscriptionsService {
 
       subscription: {
         id: updatedSubscription.id,
+
         plan: updatedSubscription.plan,
+
         status: updatedSubscription.status,
+
         startsAt: updatedSubscription.startsAt,
+
         endsAt: updatedSubscription.endsAt,
+
         scheduledPlan: null,
+
         scheduledPlanAt: null,
       },
     };
@@ -965,9 +1042,10 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * APPLY SCHEDULED PLAN IF DUE
+   * APPLY EXPIRED / SCHEDULED PLAN STATE
    * ============================================================
    */
+
   async applyScheduledPlanIfDue(businessId: string) {
     const subscription = await this.prisma.subscription.findUnique({
       where: {
@@ -982,16 +1060,9 @@ export class SubscriptionsService {
     const now = new Date();
 
     /*
-     * ============================================================
-     * FREE PLAN
-     * ============================================================
-     *
-     * FREE does not expire.
+     * FREE never expires.
      */
     if (subscription.plan === 'FREE') {
-      /*
-       * Clean up any obsolete scheduled cancellation data.
-       */
       if (
         subscription.scheduledPlan === 'FREE' ||
         (subscription.scheduledPlanAt &&
@@ -1004,8 +1075,11 @@ export class SubscriptionsService {
 
           data: {
             status: 'ACTIVE',
+
             endsAt: null,
+
             scheduledPlan: null,
+
             scheduledPlanAt: null,
           },
         });
@@ -1015,33 +1089,18 @@ export class SubscriptionsService {
     }
 
     /*
-     * ============================================================
-     * ACTIVE PAID PERIOD
-     * ============================================================
-     *
-     * STARTER / BUSINESS / PRO remain active while endsAt
-     * is still in the future.
+     * Paid subscription still active.
      */
     if (subscription.endsAt && subscription.endsAt.getTime() > now.getTime()) {
       return subscription;
     }
 
     /*
-     * ============================================================
-     * EXPIRED PAID PLAN
-     * ============================================================
+     * Paid period has expired.
      *
-     * At this point:
-     *
-     * - plan is STARTER / BUSINESS / PRO
-     * - endsAt is missing OR has passed
-     *
-     * The business must no longer receive paid-plan access.
-     *
-     * We never automatically grant another paid period without
-     * confirmed payment.
+     * SwiftReceipt never automatically grants another paid
+     * period without a verified payment.
      */
-
     const intendedNextPlan =
       subscription.scheduledPlan && subscription.scheduledPlan !== 'FREE'
         ? subscription.scheduledPlan
@@ -1053,40 +1112,32 @@ export class SubscriptionsService {
       },
 
       data: {
-        /*
-         * Expired paid subscriptions fall back to FREE.
-         */
         plan: 'FREE',
 
-        /*
-         * FREE itself is an active SwiftReceipt tier.
-         */
         status: 'ACTIVE',
 
         startsAt: now,
+
         endsAt: null,
 
-        /*
-         * Cancellation to FREE has now completed, so clear it.
-         *
-         * If the customer previously requested another paid plan,
-         * preserve that intention. It can later be activated only
-         * after successful payment.
-         */
         scheduledPlan: intendedNextPlan,
 
-        /*
-         * The previous effective date has already passed.
-         */
         scheduledPlanAt: null,
       },
     });
   }
 
+  /*
+   * ============================================================
+   * PAYMENT HISTORY
+   * ============================================================
+   */
+
   async getPaymentHistory(userId: string) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -1096,6 +1147,7 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
       },
     });
@@ -1111,7 +1163,9 @@ export class SubscriptionsService {
         'Only the business owner can view subscription payment history.',
       );
     }
+
     await this.expirePendingPayments(membership.businessId);
+
     const payments = await this.prisma.subscriptionPayment.findMany({
       where: {
         businessId: membership.businessId,
@@ -1123,22 +1177,34 @@ export class SubscriptionsService {
 
       select: {
         id: true,
+
         reference: true,
+
         plan: true,
+
         billingPeriod: true,
+
         amount: true,
+
         currency: true,
+
         provider: true,
+
         status: true,
 
-        providerTransactionId: true,
         providerReference: true,
+
+        providerTransactionId: true,
+
+        paidAt: true,
+
+        expiresAt: true,
 
         failureReason: true,
 
         createdAt: true,
-        paidAt: true,
-        expiresAt: true,
+
+        updatedAt: true,
       },
     });
 
@@ -1146,19 +1212,26 @@ export class SubscriptionsService {
       payments: payments.map((payment) => ({
         ...payment,
 
-        /*
-         * Prisma Decimal should not be exposed directly
-         * to the mobile application.
-         */
         amount: payment.amount.toString(),
       })),
     };
   }
 
-  async getPaymentDetails(userId: string, paymentId: string) {
+  /*
+   * ============================================================
+   * PAYMENT DETAILS
+   * ============================================================
+   */
+
+  async getPaymentDetails(
+    userId: string,
+
+    paymentId: string,
+  ) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -1168,12 +1241,15 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
 
         business: {
           select: {
             id: true,
+
             businessName: true,
+
             defaultCurrency: true,
           },
         },
@@ -1191,45 +1267,59 @@ export class SubscriptionsService {
         'Only the business owner can view subscription payment details.',
       );
     }
+
     await this.expirePendingPayments(membership.businessId);
+
     const payment = await this.prisma.subscriptionPayment.findFirst({
       where: {
         id: paymentId,
+
         businessId: membership.businessId,
       },
 
       select: {
         id: true,
+
         reference: true,
 
         plan: true,
+
         billingPeriod: true,
 
         amount: true,
+
         currency: true,
 
         provider: true,
+
         status: true,
 
         checkoutUrl: true,
 
         providerReference: true,
+
         providerTransactionId: true,
 
         paidAt: true,
+
         expiresAt: true,
 
         failureReason: true,
 
         createdAt: true,
+
         updatedAt: true,
 
         subscription: {
           select: {
             id: true,
+
             plan: true,
+
             status: true,
+
             startsAt: true,
+
             endsAt: true,
           },
         },
@@ -1255,19 +1345,19 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * MANUAL PAYMENT VERIFICATION / RECONCILIATION
-   * POST /subscriptions/payments/:id/verify
+   * MANUAL PAYMENT VERIFICATION
    * ============================================================
    */
 
-  async verifySubscriptionPayment(userId: string, paymentId: string) {
-    /*
-     * Only the authenticated business owner can manually
-     * reconcile subscription payments.
-     */
+  async verifySubscriptionPayment(
+    userId: string,
+
+    paymentId: string,
+  ) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -1277,14 +1367,11 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
       },
     });
 
-    /*
-     * Always verify that membership exists BEFORE accessing
-     * membership.businessId.
-     */
     if (!membership) {
       throw new NotFoundException(
         'You do not have an active business membership.',
@@ -1297,18 +1384,8 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Before contacting the payment provider, expire any
-     * abandoned checkout whose local checkout lifetime has passed.
-     */
     await this.expirePendingPayments(membership.businessId);
 
-    /*
-     * Security:
-     *
-     * Payment ID alone must never allow access to another
-     * business's transaction.
-     */
     const payment = await this.prisma.subscriptionPayment.findFirst({
       where: {
         id: paymentId,
@@ -1318,7 +1395,9 @@ export class SubscriptionsService {
 
       select: {
         id: true,
+
         status: true,
+
         failureReason: true,
       },
     });
@@ -1327,38 +1406,26 @@ export class SubscriptionsService {
       throw new NotFoundException('Subscription payment could not be found.');
     }
 
-    /*
-     * A locally expired/cancelled checkout should not continue
-     * contacting the payment provider.
-     */
     if (payment.status === 'CANCELLED') {
       throw new ForbiddenException(
-        payment.failureReason?.includes('expired')
+        payment.failureReason?.toLowerCase().includes('expired')
           ? 'This payment checkout has expired. Please start a new checkout.'
           : 'This payment checkout was cancelled. Please start a new checkout.',
       );
     }
 
-    /*
-     * Failed payments can be retried through the retry-payment
-     * endpoint instead of repeatedly reconciling them.
-     */
     if (payment.status === 'FAILED') {
       throw new ForbiddenException(
         'This payment has failed. Please start a new checkout.',
       );
     }
 
-    /*
-     * SUCCESSFUL payments are safe to pass through because
-     * verifyAndActivatePayment() has an idempotency fast path.
-     */
     return this.verifyAndActivatePayment(payment.id);
   }
 
   /*
    * ============================================================
-   * EXPIRE ABANDONED PAYMENT ATTEMPTS
+   * EXPIRE ABANDONED PAYMENTS
    * ============================================================
    */
 
@@ -1375,6 +1442,7 @@ export class SubscriptionsService {
 
         expiresAt: {
           not: null,
+
           lte: now,
         },
       },
@@ -1393,15 +1461,19 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * RETRY SUBSCRIPTION PAYMENT
-   * POST /subscriptions/payments/:id/retry
+   * RETRY PAYMENT
    * ============================================================
    */
 
-  async retrySubscriptionPayment(userId: string, paymentId: string) {
+  async retrySubscriptionPayment(
+    userId: string,
+
+    paymentId: string,
+  ) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -1411,6 +1483,7 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
       },
     });
@@ -1427,14 +1500,12 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * Clean up stale attempts first.
-     */
     await this.expirePendingPayments(membership.businessId);
 
     const payment = await this.prisma.subscriptionPayment.findFirst({
       where: {
         id: paymentId,
+
         businessId: membership.businessId,
       },
 
@@ -1455,17 +1526,10 @@ export class SubscriptionsService {
       throw new NotFoundException('Subscription payment could not be found.');
     }
 
-    /*
-     * Never retry a payment that already succeeded.
-     */
     if (payment.status === 'SUCCESSFUL') {
       throw new ForbiddenException('A successful payment cannot be retried.');
     }
 
-    /*
-     * A payment that is still genuinely active should be
-     * reconciled rather than duplicated.
-     */
     if (payment.status === 'PENDING' || payment.status === 'PROCESSING') {
       throw new ForbiddenException(
         'This checkout is still active. Check the payment status before starting another payment.',
@@ -1473,18 +1537,52 @@ export class SubscriptionsService {
     }
 
     /*
-     * Reuse our existing secure checkout pipeline.
-     *
-     * This creates a NEW SubscriptionPayment record with
-     * a NEW SwiftReceipt reference.
+     * Create a completely new payment attempt.
      */
-    return this.createCheckout(userId, payment.plan, payment.billingPeriod);
+    const checkout = await this.createCheckout(
+      userId,
+
+      payment.plan,
+
+      payment.billingPeriod,
+    );
+
+    /*
+     * ========================================================
+     * AUDIT — CHECKOUT RETRIED
+     * ========================================================
+     */
+
+    await this.subscriptionAuditService.record({
+      eventType: 'CHECKOUT_RETRIED',
+
+      businessId: membership.businessId,
+
+      paymentId: checkout.payment.id,
+
+      actorUserId: userId,
+
+      message: `Subscription checkout retried from previous payment ${payment.id}.`,
+
+      metadata: {
+        previousPaymentId: payment.id,
+
+        newPaymentId: checkout.payment.id,
+
+        newReference: checkout.payment.reference,
+
+        plan: payment.plan,
+
+        billingPeriod: payment.billingPeriod,
+      },
+    });
+
+    return checkout;
   }
 
   /*
    * ============================================================
-   * FOREGROUND PAYMENT RECONCILIATION
-   * POST /subscriptions/payments/reconcile
+   * FOREGROUND RECONCILIATION
    * ============================================================
    */
 
@@ -1492,6 +1590,7 @@ export class SubscriptionsService {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
+
         status: 'ACTIVE',
       },
 
@@ -1501,6 +1600,7 @@ export class SubscriptionsService {
 
       select: {
         role: true,
+
         businessId: true,
       },
     });
@@ -1517,17 +1617,8 @@ export class SubscriptionsService {
       );
     }
 
-    /*
-     * First clean up stale local checkout attempts.
-     */
     await this.expirePendingPayments(membership.businessId);
 
-    /*
-     * Only reconcile recent unresolved payments.
-     *
-     * This prevents repeatedly hitting the provider for old
-     * transactions that are no longer relevant.
-     */
     const reconciliationWindowStart = new Date(
       Date.now() - 24 * 60 * 60 * 1000,
     );
@@ -1549,21 +1640,23 @@ export class SubscriptionsService {
         createdAt: 'desc',
       },
 
-      /*
-       * Keep the foreground reconciliation lightweight.
-       */
       take: 5,
 
       select: {
         id: true,
+
         status: true,
       },
     });
 
     let successful = 0;
+
     let processing = 0;
+
     let failed = 0;
+
     let cancelled = 0;
+
     let errors = 0;
 
     for (const payment of payments) {
@@ -1590,15 +1683,11 @@ export class SubscriptionsService {
             break;
         }
       } catch (error) {
-        /*
-         * One provider failure should not prevent the remaining
-         * transactions from being reconciled.
-         */
         errors += 1;
 
         console.warn(
           `Unable to reconcile subscription payment ${payment.id}:`,
-          error,
+          error instanceof Error ? error.message : 'Unknown error',
         );
       }
     }
@@ -1613,9 +1702,13 @@ export class SubscriptionsService {
 
       results: {
         successful,
+
         processing,
+
         failed,
+
         cancelled,
+
         errors,
       },
     };
@@ -1623,13 +1716,10 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * INTERNAL PAYMENT RECONCILIATION ENTRY POINT
+   * TRUSTED INTERNAL RECONCILIATION
    * ============================================================
    *
-   * Used by trusted backend services such as the scheduler.
-   *
-   * This deliberately reuses the same idempotent provider
-   * verification + subscription activation pipeline.
+   * Used by the scheduled reconciliation service.
    */
 
   async reconcilePaymentById(paymentId: string) {
@@ -1638,7 +1728,7 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
-   * PRIVATE HELPERS
+   * PRIVATE PAYMENT VERIFICATION / ACTIVATION
    * ============================================================
    */
 
@@ -1659,12 +1749,10 @@ export class SubscriptionsService {
 
     /*
      * ============================================================
-     * IDEMPOTENCY — FAST PATH
+     * IDEMPOTENCY — ALREADY SUCCESSFUL
      * ============================================================
-     *
-     * If this transaction was already completed, never contact
-     * the provider or activate the subscription again.
      */
+
     if (payment.status === 'SUCCESSFUL') {
       return {
         message: 'Payment was already processed successfully.',
@@ -1682,32 +1770,22 @@ export class SubscriptionsService {
 
         subscription: {
           id: payment.subscription.id,
-
           plan: payment.subscription.plan,
-
           status: payment.subscription.status,
-
           startsAt: payment.subscription.startsAt,
-
           endsAt: payment.subscription.endsAt,
         },
       };
     }
 
     /*
-     * Resolve the actual payment-provider adapter.
-     *
-     * Today this is PAYUNIT, but using the registry here means
-     * this reconciliation pipeline can later support Paystack,
-     * Stripe, dLocal, etc.
+     * ============================================================
+     * VERIFY DIRECTLY WITH PROVIDER
+     * ============================================================
      */
+
     const adapter = this.paymentProviderRegistry.get(payment.provider);
 
-    /*
-     * Never trust the local status alone.
-     *
-     * Ask the payment provider for the authoritative status.
-     */
     const verified = await adapter.verifyPayment({
       reference: payment.reference,
 
@@ -1718,37 +1796,97 @@ export class SubscriptionsService {
 
     /*
      * ============================================================
-     * NOT SUCCESSFUL YET
+     * PROVIDER HAS NOT CONFIRMED SUCCESS
      * ============================================================
      */
 
     if (!verified.successful) {
       const status = this.mapProviderPaymentStatus(verified.rawStatus);
 
-      const updatedPayment = await this.prisma.subscriptionPayment.update({
+      const failureReason =
+        status === 'FAILED'
+          ? 'The payment provider reported that the transaction failed.'
+          : status === 'CANCELLED'
+            ? 'The payment provider reported that the transaction was cancelled.'
+            : null;
+
+      /*
+       * Terminal statuses are transitioned conditionally.
+       *
+       * This is important because webhook + scheduler + foreground
+       * reconciliation could all inspect the same payment.
+       *
+       * Only the request that actually changes:
+       *
+       * PROCESSING → FAILED
+       * PROCESSING → CANCELLED
+       *
+       * gets transitionCount = 1 and therefore creates the
+       * corresponding audit event.
+       */
+
+      let transitionCount = 0;
+
+      if (status === 'FAILED' || status === 'CANCELLED') {
+        const transition = await this.prisma.subscriptionPayment.updateMany({
+          where: {
+            id: payment.id,
+
+            status: {
+              in: ['PENDING', 'PROCESSING'],
+            },
+          },
+
+          data: {
+            status,
+
+            providerTransactionId:
+              verified.providerTransactionId ?? payment.providerTransactionId,
+
+            providerReference:
+              verified.providerReference ?? payment.providerReference,
+
+            failureReason,
+          },
+        });
+
+        transitionCount = transition.count;
+      } else {
+        /*
+         * Unresolved statuses remain PROCESSING.
+         *
+         * Do not overwrite a payment if another request has already
+         * moved it to a terminal state.
+         */
+        await this.prisma.subscriptionPayment.updateMany({
+          where: {
+            id: payment.id,
+
+            status: {
+              in: ['PENDING', 'PROCESSING'],
+            },
+          },
+
+          data: {
+            status: 'PROCESSING',
+
+            providerTransactionId:
+              verified.providerTransactionId ?? payment.providerTransactionId,
+
+            providerReference:
+              verified.providerReference ?? payment.providerReference,
+
+            failureReason: null,
+          },
+        });
+      }
+
+      /*
+       * Reload the authoritative local payment state.
+       */
+      const updatedPayment = await this.prisma.subscriptionPayment.findUnique({
         where: {
           id: payment.id,
-        },
-
-        data: {
-          status,
-
-          providerTransactionId:
-            verified.providerTransactionId ?? payment.providerTransactionId,
-
-          providerReference:
-            verified.providerReference ?? payment.providerReference,
-
-          /*
-           * Preserve a useful local explanation for terminal
-           * provider states.
-           */
-          failureReason:
-            status === 'FAILED'
-              ? 'The payment provider reported that the transaction failed.'
-              : status === 'CANCELLED'
-                ? 'The payment provider reported that the transaction was cancelled.'
-                : null,
         },
 
         select: {
@@ -1766,11 +1904,89 @@ export class SubscriptionsService {
         },
       });
 
+      if (!updatedPayment) {
+        throw new NotFoundException('Subscription payment could not be found.');
+      }
+
+      /*
+       * ============================================================
+       * AUDIT — PAYMENT FAILED
+       * ============================================================
+       */
+
+      if (status === 'FAILED' && transitionCount > 0) {
+        await this.subscriptionAuditService.record({
+          eventType: 'PAYMENT_FAILED',
+
+          businessId: payment.businessId,
+
+          subscriptionId: payment.subscriptionId,
+
+          paymentId: payment.id,
+
+          message: `Subscription payment ${payment.reference} failed.`,
+
+          metadata: {
+            reference: payment.reference,
+
+            plan: payment.plan,
+
+            billingPeriod: payment.billingPeriod,
+
+            amount: payment.amount.toString(),
+
+            currency: payment.currency,
+
+            provider: payment.provider,
+
+            providerStatus: verified.rawStatus ?? 'UNKNOWN',
+
+            reason: failureReason ?? 'Payment failed.',
+          },
+        });
+      }
+
+      /*
+       * ============================================================
+       * AUDIT — PAYMENT CANCELLED
+       * ============================================================
+       */
+
+      if (status === 'CANCELLED' && transitionCount > 0) {
+        await this.subscriptionAuditService.record({
+          eventType: 'PAYMENT_CANCELLED',
+
+          businessId: payment.businessId,
+
+          subscriptionId: payment.subscriptionId,
+
+          paymentId: payment.id,
+
+          message: `Subscription payment ${payment.reference} was cancelled.`,
+
+          metadata: {
+            reference: payment.reference,
+
+            plan: payment.plan,
+
+            billingPeriod: payment.billingPeriod,
+
+            amount: payment.amount.toString(),
+
+            currency: payment.currency,
+
+            provider: payment.provider,
+
+            providerStatus: verified.rawStatus ?? 'UNKNOWN',
+          },
+        });
+      }
+
       return {
         message:
-          status === 'FAILED'
+          updatedPayment.status === 'FAILED'
             ? 'Payment verification confirmed that the transaction failed.'
-            : status === 'CANCELLED'
+            : updatedPayment.status === 'CANCELLED'
               ? 'Payment verification confirmed that the transaction was cancelled.'
               : 'Payment has not yet been confirmed as successful.',
 
@@ -1798,20 +2014,63 @@ export class SubscriptionsService {
       !Number.isFinite(receivedAmount) ||
       Math.abs(receivedAmount - expectedAmount) > 0.000001
     ) {
-      await this.prisma.subscriptionPayment.update({
+      const failureReason =
+        `Verified amount mismatch. Expected ` +
+        `${payment.amount.toString()} ${payment.currency}, ` +
+        `received ${verified.amount} ${verified.currency}.`;
+
+      /*
+       * Only transition a still-unresolved payment.
+       */
+      const transition = await this.prisma.subscriptionPayment.updateMany({
         where: {
           id: payment.id,
+
+          status: {
+            in: ['PENDING', 'PROCESSING'],
+          },
         },
 
         data: {
           status: 'FAILED',
 
-          failureReason:
-            `Verified amount mismatch. Expected ` +
-            `${payment.amount.toString()} ${payment.currency}, ` +
-            `received ${verified.amount} ${verified.currency}.`,
+          failureReason,
         },
       });
+
+      if (transition.count > 0) {
+        await this.subscriptionAuditService.record({
+          eventType: 'PAYMENT_FAILED',
+
+          businessId: payment.businessId,
+
+          subscriptionId: payment.subscriptionId,
+
+          paymentId: payment.id,
+
+          message: `Subscription payment ${payment.reference} failed amount verification.`,
+
+          metadata: {
+            reference: payment.reference,
+
+            plan: payment.plan,
+
+            billingPeriod: payment.billingPeriod,
+
+            expectedAmount: payment.amount.toString(),
+
+            receivedAmount: verified.amount,
+
+            expectedCurrency: payment.currency,
+
+            receivedCurrency: verified.currency,
+
+            provider: payment.provider,
+
+            reason: 'AMOUNT_MISMATCH',
+          },
+        });
+      }
 
       throw new ForbiddenException(
         'Verified payment amount does not match the expected subscription amount.',
@@ -1825,19 +2084,57 @@ export class SubscriptionsService {
      */
 
     if (payment.currency.toUpperCase() !== verified.currency.toUpperCase()) {
-      await this.prisma.subscriptionPayment.update({
+      const failureReason =
+        `Verified currency mismatch. Expected ` +
+        `${payment.currency}, received ${verified.currency}.`;
+
+      const transition = await this.prisma.subscriptionPayment.updateMany({
         where: {
           id: payment.id,
+
+          status: {
+            in: ['PENDING', 'PROCESSING'],
+          },
         },
 
         data: {
           status: 'FAILED',
 
-          failureReason:
-            `Verified currency mismatch. Expected ` +
-            `${payment.currency}, received ${verified.currency}.`,
+          failureReason,
         },
       });
+
+      if (transition.count > 0) {
+        await this.subscriptionAuditService.record({
+          eventType: 'PAYMENT_FAILED',
+
+          businessId: payment.businessId,
+
+          subscriptionId: payment.subscriptionId,
+
+          paymentId: payment.id,
+
+          message: `Subscription payment ${payment.reference} failed currency verification.`,
+
+          metadata: {
+            reference: payment.reference,
+
+            plan: payment.plan,
+
+            billingPeriod: payment.billingPeriod,
+
+            amount: payment.amount.toString(),
+
+            expectedCurrency: payment.currency,
+
+            receivedCurrency: verified.currency,
+
+            provider: payment.provider,
+
+            reason: 'CURRENCY_MISMATCH',
+          },
+        });
+      }
 
       throw new ForbiddenException(
         'Verified payment currency does not match the expected subscription currency.',
@@ -1846,7 +2143,7 @@ export class SubscriptionsService {
 
     /*
      * ============================================================
-     * SUBSCRIPTION PERIOD
+     * CALCULATE SUBSCRIPTION PERIOD
      * ============================================================
      */
 
@@ -1854,22 +2151,14 @@ export class SubscriptionsService {
 
     const endsAt = this.calculateSubscriptionEndDate(
       startsAt,
+
       payment.billingPeriod,
     );
 
     /*
      * ============================================================
-     * ATOMIC ACTIVATION
+     * ATOMIC PAYMENT + SUBSCRIPTION ACTIVATION
      * ============================================================
-     *
-     * We re-read the payment inside the transaction.
-     *
-     * This protects against:
-     *
-     * - webhook + manual verify arriving simultaneously
-     * - two webhook deliveries
-     * - repeated user taps
-     * - mobile retries
      */
 
     const result = await this.prisma.$transaction(async (transaction) => {
@@ -1884,8 +2173,8 @@ export class SubscriptionsService {
       }
 
       /*
-       * Another request may have completed this payment
-       * while provider verification was happening.
+       * Another reconciliation request may already have won
+       * the race while provider verification was running.
        */
       if (currentPayment.status === 'SUCCESSFUL') {
         const currentSubscription = await transaction.subscription.findUnique({
@@ -1904,7 +2193,7 @@ export class SubscriptionsService {
       }
 
       /*
-       * Mark transaction successful.
+       * Mark payment successful.
        */
       const completedPayment = await transaction.subscriptionPayment.update({
         where: {
@@ -1928,8 +2217,7 @@ export class SubscriptionsService {
       });
 
       /*
-       * Activate exactly the plan associated with this
-       * particular payment.
+       * Activate the exact plan purchased by this payment.
        */
       const updatedSubscription = await transaction.subscription.update({
         where: {
@@ -1945,10 +2233,6 @@ export class SubscriptionsService {
 
           endsAt,
 
-          /*
-           * A newly paid subscription supersedes any
-           * scheduled cancellation/downgrade.
-           */
           scheduledPlan: null,
 
           scheduledPlanAt: null,
@@ -1963,6 +2247,40 @@ export class SubscriptionsService {
         alreadyProcessed: false,
       };
     });
+
+    /*
+     * ============================================================
+     * AUDIT — PAYMENT SUCCESSFUL
+     * ============================================================
+     */
+
+    if (!result.alreadyProcessed) {
+      await this.subscriptionAuditService.record({
+        eventType: 'PAYMENT_SUCCESSFUL',
+
+        businessId: result.payment.businessId,
+
+        subscriptionId: result.payment.subscriptionId,
+
+        paymentId: result.payment.id,
+
+        message: `Subscription payment ${result.payment.reference} was verified successfully.`,
+
+        metadata: {
+          reference: result.payment.reference,
+
+          plan: result.payment.plan,
+
+          billingPeriod: result.payment.billingPeriod,
+
+          amount: result.payment.amount.toString(),
+
+          currency: result.payment.currency,
+
+          provider: result.payment.provider,
+        },
+      });
+    }
 
     return {
       message: result.alreadyProcessed
@@ -2002,17 +2320,26 @@ export class SubscriptionsService {
         : null,
     };
   }
+  /*
+   * ============================================================
+   * HELPERS
+   * ============================================================
+   */
 
   private getPlanRank(plan: SubscriptionPlan): number {
     const ranks: Record<SubscriptionPlan, number> = {
       FREE: 0,
+
       STARTER: 1,
+
       BUSINESS: 2,
+
       PRO: 3,
     };
 
     return ranks[plan];
   }
+
   private extractPayUnitReference(payload: unknown): string {
     if (typeof payload !== 'object' || payload === null) {
       throw new ForbiddenException('Invalid PayUnit notification payload.');
@@ -2042,18 +2369,27 @@ export class SubscriptionsService {
   ): 'PROCESSING' | 'FAILED' | 'CANCELLED' {
     switch (status?.trim().toUpperCase()) {
       case 'FAILED':
+
       case 'FAILURE':
+
       case 'DECLINED':
+
       case 'REJECTED':
         return 'FAILED';
 
       case 'CANCELLED':
+
       case 'CANCELED':
         return 'CANCELLED';
 
       case 'PENDING':
+
       case 'PROCESSING':
+
+      case 'INITIATE':
+
       case 'INITIATED':
+
       default:
         return 'PROCESSING';
     }
@@ -2061,6 +2397,7 @@ export class SubscriptionsService {
 
   private calculateSubscriptionEndDate(
     startsAt: Date,
+
     billingPeriod: SubscriptionBillingPeriod,
   ): Date {
     const endsAt = new Date(startsAt);
@@ -2076,10 +2413,6 @@ export class SubscriptionsService {
     return endsAt;
   }
 
-  /*
-   * Resolve regional pricing from the business's
-   * main-branch country.
-   */
   private resolvePricingMarket(
     country?: string | null,
   ): SubscriptionPricingMarket {
@@ -2096,12 +2429,6 @@ export class SubscriptionsService {
     return 'GLOBAL';
   }
 
-  /*
-   * Internal SwiftReceipt transaction reference.
-   *
-   * We deliberately avoid hyphens and other punctuation
-   * for compatibility with payment providers.
-   */
   private generatePaymentReference(): string {
     const timestampPart = Date.now().toString(36).toUpperCase();
 

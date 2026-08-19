@@ -9,12 +9,18 @@ import { SubscriptionReceiptService } from './subscription-receipt.service';
 import { SubscriptionsController } from './subscriptions.controller';
 import { SubscriptionsService } from './subscriptions.service';
 
+import { SubscriptionReconciliationScheduler } from './subscription-reconciliation.scheduler';
+
 @Module({
   imports: [PrismaModule, AuthModule, PaymentsModule],
 
   controllers: [SubscriptionsController, SubscriptionPaymentsController],
 
-  providers: [SubscriptionsService, SubscriptionReceiptService],
+  providers: [
+    SubscriptionsService,
+    SubscriptionReceiptService,
+    SubscriptionReconciliationScheduler,
+  ],
 
   exports: [SubscriptionsService],
 })

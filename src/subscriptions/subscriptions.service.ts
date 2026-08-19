@@ -1623,6 +1623,21 @@ export class SubscriptionsService {
 
   /*
    * ============================================================
+   * INTERNAL PAYMENT RECONCILIATION ENTRY POINT
+   * ============================================================
+   *
+   * Used by trusted backend services such as the scheduler.
+   *
+   * This deliberately reuses the same idempotent provider
+   * verification + subscription activation pipeline.
+   */
+
+  async reconcilePaymentById(paymentId: string) {
+    return this.verifyAndActivatePayment(paymentId);
+  }
+
+  /*
+   * ============================================================
    * PRIVATE HELPERS
    * ============================================================
    */

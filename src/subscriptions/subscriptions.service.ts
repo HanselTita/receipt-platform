@@ -506,10 +506,41 @@ export class SubscriptionsService {
       },
     });
 
-    if (subscription.plan === plan && subscription.status === 'ACTIVE') {
-      throw new ForbiddenException(
-        `Your business is already on the ${plan} plan.`,
-      );
+    /*
+     * ============================================================
+     * SAME-PLAN RENEWAL
+     * ============================================================
+     *
+     * A customer may purchase another billing period for the
+     * currently active paid plan.
+     *
+     * Example:
+     *
+     * STARTER monthly → STARTER monthly renewal
+     *
+     * FREE is already rejected above because it does not use
+     * paid checkout.
+     */
+
+    const isSamePlanRenewal =
+      subscription.plan === plan && subscription.status === 'ACTIVE';
+
+    /*
+     * If this is not a renewal, prevent checkout for a lower plan.
+     *
+     * Downgrades should remain scheduled for the end of the
+     * existing paid period rather than immediately replacing it.
+     */
+    if (!isSamePlanRenewal) {
+      const currentRank = this.getPlanRank(subscription.plan);
+
+      const targetRank = this.getPlanRank(plan);
+
+      if (targetRank < currentRank) {
+        throw new ForbiddenException(
+          'Downgrades must be scheduled for the end of the current billing period.',
+        );
+      }
     }
 
     const mainBranch = membership.business.branches[0];
@@ -534,6 +565,105 @@ export class SubscriptionsService {
     }
 
     const provider = 'PAYUNIT' as const;
+
+    /*
+     * ============================================================
+     * REUSE EXISTING ACTIVE CHECKOUT
+     * ============================================================
+     *
+     * Prevent accidental duplicate PayUnit checkout sessions.
+     *
+     * If the business already has an unresolved, unexpired checkout
+     * for the exact same:
+     *
+     * - plan
+     * - billing period
+     * - provider
+     *
+     * return that checkout instead of creating another payment.
+     */
+
+    const now = new Date();
+
+    /*
+     * First expire any stale checkout attempts.
+     *
+     * This also records PAYMENT_EXPIRED audit events through the
+     * centralized expiry pipeline.
+     */
+    await this.expirePendingPayments(membership.businessId);
+
+    const existingPayment = await this.prisma.subscriptionPayment.findFirst({
+      where: {
+        businessId: membership.businessId,
+
+        plan,
+
+        billingPeriod,
+
+        provider,
+
+        status: {
+          in: ['PENDING', 'PROCESSING'],
+        },
+
+        expiresAt: {
+          gt: now,
+        },
+
+        checkoutUrl: {
+          not: null,
+        },
+      },
+
+      orderBy: {
+        createdAt: 'desc',
+      },
+
+      select: {
+        id: true,
+        reference: true,
+        plan: true,
+        billingPeriod: true,
+        amount: true,
+        currency: true,
+        provider: true,
+        status: true,
+        checkoutUrl: true,
+        providerReference: true,
+        providerTransactionId: true,
+        expiresAt: true,
+        createdAt: true,
+      },
+    });
+
+    if (existingPayment) {
+      return {
+        message:
+          'An active subscription checkout already exists. The existing checkout has been returned.',
+
+        business: {
+          id: membership.business.id,
+
+          businessName: membership.business.businessName,
+        },
+
+        market,
+
+        payment: {
+          ...existingPayment,
+
+          amount: existingPayment.amount.toString(),
+        },
+
+        reused: true,
+      };
+    }
+
+    /*
+     * No reusable checkout exists.
+     * Create a fresh payment attempt.
+     */
 
     const reference = this.generatePaymentReference();
 
@@ -2117,12 +2247,7 @@ export class SubscriptionsService {
      * ========================================================
      */
 
-    const startsAt = new Date();
-
-    const endsAt = this.calculateSubscriptionEndDate(
-      startsAt,
-      payment.billingPeriod,
-    );
+    const paymentConfirmedAt = new Date();
 
     /*
      * ========================================================
@@ -2175,6 +2300,42 @@ export class SubscriptionsService {
         );
       }
 
+      /*
+       * ============================================================
+       * DETERMINE ACTIVATION / UPGRADE / RENEWAL PERIOD
+       * ============================================================
+       */
+
+      const isActiveSamePlanRenewal =
+        previousSubscription.status === 'ACTIVE' &&
+        previousSubscription.plan === currentPayment.plan &&
+        previousSubscription.plan !== 'FREE' &&
+        previousSubscription.endsAt !== null &&
+        previousSubscription.endsAt.getTime() > paymentConfirmedAt.getTime();
+
+      /*
+       * New activation / upgrade:
+       *
+       * starts now and receives a fresh billing period.
+       *
+       * Active same-plan renewal:
+       *
+       * preserve the original startsAt and extend the billing
+       * period from the existing endsAt.
+       */
+      const subscriptionStartsAt = isActiveSamePlanRenewal
+        ? previousSubscription.startsAt
+        : paymentConfirmedAt;
+
+      const billingPeriodBase = isActiveSamePlanRenewal
+        ? previousSubscription.endsAt!
+        : paymentConfirmedAt;
+
+      const subscriptionEndsAt = this.calculateSubscriptionEndDate(
+        billingPeriodBase,
+        currentPayment.billingPeriod,
+      );
+
       const completedPayment = await transaction.subscriptionPayment.update({
         where: {
           id: currentPayment.id,
@@ -2183,7 +2344,7 @@ export class SubscriptionsService {
         data: {
           status: 'SUCCESSFUL',
 
-          paidAt: startsAt,
+          paidAt: paymentConfirmedAt,
 
           failureReason: null,
 
@@ -2206,9 +2367,9 @@ export class SubscriptionsService {
 
           status: 'ACTIVE',
 
-          startsAt,
+          startsAt: subscriptionStartsAt,
 
-          endsAt,
+          endsAt: subscriptionEndsAt,
 
           scheduledPlan: null,
 
@@ -2218,11 +2379,8 @@ export class SubscriptionsService {
 
       return {
         payment: completedPayment,
-
         subscription: updatedSubscription,
-
         previousSubscription,
-
         alreadyProcessed: false,
       };
     });

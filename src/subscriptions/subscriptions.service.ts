@@ -661,6 +661,66 @@ export class SubscriptionsService {
     }
 
     /*
+     * ============================================================
+     * BLOCK A SECOND DIFFERENT ACTIVE CHECKOUT
+     * ============================================================
+     *
+     * PayUnit hosted checkout links remain valid for a limited
+     * period. We do not currently have a provider-side cancellation
+     * API that we can safely use to invalidate an older checkout.
+     *
+     * Therefore SwiftReceipt allows only ONE active subscription
+     * checkout per business at a time.
+     */
+
+    const otherActivePayment = await this.prisma.subscriptionPayment.findFirst({
+      where: {
+        businessId: membership.businessId,
+
+        provider,
+
+        status: {
+          in: ['PENDING', 'PROCESSING'],
+        },
+
+        expiresAt: {
+          gt: now,
+        },
+
+        checkoutUrl: {
+          not: null,
+        },
+
+        /*
+         * Exclude the exact plan/period combination because that
+         * case was already handled above by checkout reuse.
+         */
+        NOT: {
+          plan,
+          billingPeriod,
+        },
+      },
+
+      orderBy: {
+        createdAt: 'desc',
+      },
+
+      select: {
+        id: true,
+        reference: true,
+        plan: true,
+        billingPeriod: true,
+        expiresAt: true,
+      },
+    });
+
+    if (otherActivePayment) {
+      throw new ForbiddenException(
+        `Another subscription checkout is still active for ${otherActivePayment.plan} (${otherActivePayment.billingPeriod}). Please complete it or wait for it to expire before starting a different checkout.`,
+      );
+    }
+
+    /*
      * No reusable checkout exists.
      * Create a fresh payment attempt.
      */
@@ -2336,9 +2396,25 @@ export class SubscriptionsService {
         currentPayment.billingPeriod,
       );
 
-      const completedPayment = await transaction.subscriptionPayment.update({
+      /*
+       * ============================================================
+       * ATOMIC PAYMENT CLAIM
+       * ============================================================
+       *
+       * Only one concurrent worker may transition this payment from
+       * unresolved → SUCCESSFUL.
+       *
+       * Manual verification, webhook processing and the scheduler
+       * may all reach this point at approximately the same time.
+       */
+
+      const paymentClaim = await transaction.subscriptionPayment.updateMany({
         where: {
           id: currentPayment.id,
+
+          status: {
+            in: ['PENDING', 'PROCESSING'],
+          },
         },
 
         data: {
@@ -2356,6 +2432,62 @@ export class SubscriptionsService {
             verified.providerReference ?? currentPayment.providerReference,
         },
       });
+
+      /*
+       * Another request won the race.
+       *
+       * Do NOT modify the subscription again.
+       */
+
+      if (paymentClaim.count === 0) {
+        const processedPayment =
+          await transaction.subscriptionPayment.findUnique({
+            where: {
+              id: currentPayment.id,
+            },
+          });
+
+        if (!processedPayment) {
+          throw new NotFoundException(
+            'Subscription payment could not be found.',
+          );
+        }
+
+        const currentSubscription = await transaction.subscription.findUnique({
+          where: {
+            id: processedPayment.subscriptionId,
+          },
+        });
+
+        return {
+          payment: processedPayment,
+
+          subscription: currentSubscription,
+
+          previousSubscription: currentSubscription,
+
+          alreadyProcessed: true,
+        };
+      }
+
+      /*
+       * This transaction won the claim.
+       *
+       * Fetch the successfully transitioned payment before
+       * continuing with subscription activation/renewal.
+       */
+
+      const completedPayment = await transaction.subscriptionPayment.findUnique(
+        {
+          where: {
+            id: currentPayment.id,
+          },
+        },
+      );
+
+      if (!completedPayment) {
+        throw new NotFoundException('Subscription payment could not be found.');
+      }
 
       const updatedSubscription = await transaction.subscription.update({
         where: {
@@ -2377,6 +2509,84 @@ export class SubscriptionsService {
         },
       });
 
+      /*
+       * ============================================================
+       * TRANSACTIONAL PAYMENT SUCCESS AUDIT
+       * ============================================================
+       */
+
+      await this.subscriptionAuditService.record(
+        {
+          eventType: 'PAYMENT_SUCCESSFUL',
+
+          businessId: completedPayment.businessId,
+
+          subscriptionId: completedPayment.subscriptionId,
+
+          paymentId: completedPayment.id,
+
+          message: `Subscription payment ${completedPayment.reference} was verified successfully.`,
+
+          metadata: {
+            reference: completedPayment.reference,
+
+            plan: completedPayment.plan,
+
+            billingPeriod: completedPayment.billingPeriod,
+
+            amount: completedPayment.amount.toString(),
+
+            currency: completedPayment.currency,
+
+            provider: completedPayment.provider,
+          },
+        },
+        transaction,
+      );
+
+      /*
+       * ============================================================
+       * TRANSACTIONAL SUBSCRIPTION LIFECYCLE AUDIT
+       * ============================================================
+       */
+
+      const isRenewal =
+        previousSubscription.plan === updatedSubscription.plan &&
+        previousSubscription.plan !== 'FREE';
+
+      await this.subscriptionAuditService.record(
+        {
+          eventType: isRenewal
+            ? 'SUBSCRIPTION_RENEWED'
+            : 'SUBSCRIPTION_ACTIVATED',
+
+          businessId: completedPayment.businessId,
+
+          subscriptionId: updatedSubscription.id,
+
+          paymentId: completedPayment.id,
+
+          message: isRenewal
+            ? `${updatedSubscription.plan} subscription renewed successfully.`
+            : `${updatedSubscription.plan} subscription activated successfully.`,
+
+          metadata: {
+            previousPlan: previousSubscription.plan,
+
+            newPlan: updatedSubscription.plan,
+
+            billingPeriod: completedPayment.billingPeriod,
+
+            startsAt: updatedSubscription.startsAt.toISOString(),
+
+            endsAt: updatedSubscription.endsAt?.toISOString() ?? null,
+
+            paymentReference: completedPayment.reference,
+          },
+        },
+        transaction,
+      );
+
       return {
         payment: completedPayment,
         subscription: updatedSubscription,
@@ -2384,85 +2594,6 @@ export class SubscriptionsService {
         alreadyProcessed: false,
       };
     });
-
-    /*
-     * ========================================================
-     * PAYMENT SUCCESS AUDIT
-     * ========================================================
-     */
-
-    if (!result.alreadyProcessed) {
-      await this.subscriptionAuditService.record({
-        eventType: 'PAYMENT_SUCCESSFUL',
-
-        businessId: result.payment.businessId,
-
-        subscriptionId: result.payment.subscriptionId,
-
-        paymentId: result.payment.id,
-
-        message: `Subscription payment ${result.payment.reference} was verified successfully.`,
-
-        metadata: {
-          reference: result.payment.reference,
-
-          plan: result.payment.plan,
-
-          billingPeriod: result.payment.billingPeriod,
-
-          amount: result.payment.amount.toString(),
-
-          currency: result.payment.currency,
-
-          provider: result.payment.provider,
-        },
-      });
-    }
-
-    /*
-     * ========================================================
-     * SUBSCRIPTION ACTIVATED / RENEWED AUDIT
-     * ========================================================
-     */
-
-    if (!result.alreadyProcessed && result.subscription) {
-      const previousSubscription = result.previousSubscription;
-
-      const isRenewal =
-        previousSubscription !== null &&
-        previousSubscription.plan === result.subscription.plan &&
-        previousSubscription.plan !== 'FREE';
-
-      await this.subscriptionAuditService.record({
-        eventType: isRenewal
-          ? 'SUBSCRIPTION_RENEWED'
-          : 'SUBSCRIPTION_ACTIVATED',
-
-        businessId: result.payment.businessId,
-
-        subscriptionId: result.subscription.id,
-
-        paymentId: result.payment.id,
-
-        message: isRenewal
-          ? `${result.subscription.plan} subscription renewed successfully.`
-          : `${result.subscription.plan} subscription activated successfully.`,
-
-        metadata: {
-          previousPlan: previousSubscription?.plan ?? null,
-
-          newPlan: result.subscription.plan,
-
-          billingPeriod: result.payment.billingPeriod,
-
-          startsAt: result.subscription.startsAt.toISOString(),
-
-          endsAt: result.subscription.endsAt?.toISOString() ?? null,
-
-          paymentReference: result.payment.reference,
-        },
-      });
-    }
 
     return {
       message: result.alreadyProcessed

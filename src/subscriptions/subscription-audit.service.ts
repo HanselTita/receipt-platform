@@ -23,6 +23,11 @@ export type RecordSubscriptionAuditEventInput = {
   actorUserId?: string | null;
 };
 
+type AuditDatabaseClient = Pick<
+  Prisma.TransactionClient,
+  'subscriptionAuditEvent'
+>;
+
 @Injectable()
 export class SubscriptionAuditService {
   private readonly logger = new Logger(SubscriptionAuditService.name);
@@ -34,16 +39,21 @@ export class SubscriptionAuditService {
    * RECORD AUDIT EVENT
    * ============================================================
    *
-   * Audit logging should never interfere with payment or
-   * subscription processing.
+   * When transactionClient is supplied, the audit event becomes
+   * part of the caller's existing database transaction.
    *
-   * If audit persistence fails, we log the failure but do not
-   * throw it back into the payment workflow.
+   * Without transactionClient, audit persistence remains
+   * best-effort and must not interrupt ordinary workflows.
    */
 
-  async record(input: RecordSubscriptionAuditEventInput): Promise<void> {
+  async record(
+    input: RecordSubscriptionAuditEventInput,
+    transactionClient?: AuditDatabaseClient,
+  ): Promise<void> {
+    const database = transactionClient ?? this.prisma;
+
     try {
-      await this.prisma.subscriptionAuditEvent.create({
+      await database.subscriptionAuditEvent.create({
         data: {
           eventType: input.eventType,
 
@@ -61,6 +71,20 @@ export class SubscriptionAuditService {
         },
       });
     } catch (error) {
+      /*
+       * When operating inside a transaction, rethrow.
+       *
+       * This ensures payment/subscription state cannot commit
+       * while the corresponding mandatory lifecycle audit is lost.
+       */
+      if (transactionClient) {
+        throw error;
+      }
+
+      /*
+       * Outside a transaction, preserve our existing best-effort
+       * logging behavior.
+       */
       this.logger.error(
         `Unable to record subscription audit event ${input.eventType}.`,
       );

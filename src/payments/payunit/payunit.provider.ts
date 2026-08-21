@@ -232,7 +232,6 @@ export class PayUnitProvider implements PaymentProviderAdapter {
     input: VerifyPaymentInput,
   ): Promise<VerifiedPaymentResult> {
     const credentials = this.getCredentials();
-
     /*
      * PayUnit's payment-status endpoint expects the transaction_id
      * supplied when the payment was initialized.

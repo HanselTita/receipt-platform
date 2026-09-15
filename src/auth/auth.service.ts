@@ -87,6 +87,27 @@ export class AuthService {
       throw new UnauthorizedException('Invalid email or password.');
     }
 
+    const memberships = await this.prisma.businessMembership.findMany({
+      where: {
+        userId: user.id,
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    const hasMembership = memberships.length > 0;
+
+    const hasActiveMembership = memberships.some(
+      (membership) => membership.status === 'ACTIVE',
+    );
+
+    if (hasMembership && !hasActiveMembership) {
+      throw new UnauthorizedException(
+        'Your business membership is not active.',
+      );
+    }
+
     const refreshExpiresIn = this.getRefreshTokenExpiresIn();
 
     const session = await this.authSessionsService.create({
@@ -298,6 +319,29 @@ export class AuthService {
       await this.authSessionsService.revoke(session.id);
 
       throw new UnauthorizedException('The authenticated user is unavailable.');
+    }
+
+    const memberships = await this.prisma.businessMembership.findMany({
+      where: {
+        userId: user.id,
+      },
+      select: {
+        status: true,
+      },
+    });
+
+    const hasMembership = memberships.length > 0;
+
+    const hasActiveMembership = memberships.some(
+      (membership) => membership.status === 'ACTIVE',
+    );
+
+    if (hasMembership && !hasActiveMembership) {
+      await this.authSessionsService.revoke(session.id);
+
+      throw new UnauthorizedException(
+        'Your business membership is not active.',
+      );
     }
 
     const tokens = await this.createTokenPair(user, session.id);

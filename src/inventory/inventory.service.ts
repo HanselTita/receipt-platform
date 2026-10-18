@@ -11,6 +11,10 @@ import { BusinessContextService } from '../business-context/business-context.ser
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
+import { BadRequestException } from '@nestjs/common';
+import { Prisma } from '../../generated/prisma/client';
+import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
+
 @Injectable()
 export class InventoryService {
   constructor(
@@ -204,5 +208,93 @@ export class InventoryService {
     return {
       message: 'Product deactivated successfully.',
     };
+  }
+
+  async setOpeningStock(userId: string, dto: SetOpeningStockDto) {
+    const { business } = await this.getInventoryContext(userId, true);
+
+    const branch = await this.prisma.branch.findFirst({
+      where: {
+        id: dto.branchId,
+        businessId: business.id,
+        isActive: true,
+      },
+    });
+
+    if (!branch) {
+      throw new NotFoundException('Branch not found or inactive.');
+    }
+
+    const product = await this.prisma.product.findFirst({
+      where: {
+        id: dto.productId,
+        businessId: business.id,
+        isActive: true,
+      },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Product not found or inactive.');
+    }
+
+    const quantity = new Prisma.Decimal(dto.quantity);
+    const referenceStock = new Prisma.Decimal(dto.referenceStock);
+
+    if (quantity.isNegative() || referenceStock.isNegative()) {
+      throw new BadRequestException('Stock quantities cannot be negative.');
+    }
+
+    const wholeNumberUnits = ['PIECE', 'PACK', 'BOX'];
+
+    if (
+      wholeNumberUnits.includes(product.unit) &&
+      (!quantity.isInteger() || !referenceStock.isInteger())
+    ) {
+      throw new BadRequestException(
+        `Products measured in ${product.unit} require whole-number quantities.`,
+      );
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const existing = await tx.branchStock.findUnique({
+        where: {
+          branchId_productId: {
+            branchId: dto.branchId,
+            productId: dto.productId,
+          },
+        },
+      });
+
+      if (existing) {
+        throw new ConflictException(
+          'Opening stock has already been recorded for this product at this branch.',
+        );
+      }
+
+      const stock = await tx.branchStock.create({
+        data: {
+          branchId: dto.branchId,
+          productId: dto.productId,
+          quantity,
+          referenceStock,
+          lowStockPercent: 20,
+        },
+      });
+
+      await tx.stockMovement.create({
+        data: {
+          businessId: business.id,
+          branchId: dto.branchId,
+          productId: dto.productId,
+          userId,
+          type: 'OPENING',
+          quantityChange: quantity,
+          quantityAfter: quantity,
+          note: 'Initial opening stock',
+        },
+      });
+
+      return stock;
+    });
   }
 }

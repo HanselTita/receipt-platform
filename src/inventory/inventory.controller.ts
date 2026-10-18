@@ -7,6 +7,7 @@ import type { AccessTokenPayload } from '../auth/types/access-token-payload.type
 import { InventoryService } from './inventory.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
+import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard)
@@ -45,5 +46,11 @@ export class InventoryController {
   @Patch('products/:id/deactivate')
   deactivateProduct(@CurrentUser() user: AccessTokenPayload, @Param('id') id: string) {
     return this.inventoryService.deactivateProduct(user.sub, id);
+  }
+
+  // Record initial stock for a product at a branch
+  @Post('stock/opening')
+  setOpeningStock(@CurrentUser() user: AccessTokenPayload, @Body() dto: SetOpeningStockDto) {
+    return this.inventoryService.setOpeningStock(user.sub, dto);
   }
 }

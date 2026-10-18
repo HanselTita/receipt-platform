@@ -23,6 +23,7 @@ model Business {
   createdAt       DateTime @default(now())
   updatedAt       DateTime @updatedAt
 
+  products                Product[]
   branches                Branch[]
   memberships             BusinessMembership[]
   receipts                Receipt[]
@@ -52,6 +53,8 @@ model Branch {
 
   employeeAssignments BranchAssignment[]
   receipts            Receipt[]
+  branchStocks        BranchStock[]
+  stockMovements      StockMovement[]
 }
 
 enum BusinessRole {
@@ -87,6 +90,7 @@ model User {
   correctedReceipts             Receipt[]                @relation("CorrectedByUser")
   initiatedSubscriptionPayments SubscriptionPayment[]    @relation("SubscriptionPaymentsInitiatedBy")
   subscriptionAuditEvents       SubscriptionAuditEvent[] @relation("SubscriptionAuditActor")
+  stockMovements                StockMovement[]
 }
 
 model BusinessMembership {
@@ -255,10 +259,16 @@ model ReceiptItem {
   lineTotal      Decimal
   createdAt      DateTime @default(now())
 
+  productId String?
+  product   Product? @relation(fields: [productId], references: [id], onDelete: SetNull)
+
+  stockMovements StockMovement[]
+
   receiptId String
   receipt   Receipt @relation(fields: [receiptId], references: [id], onDelete: Cascade)
 
   @@index([receiptId])
+  @@index([productId])
 }
 
 /// =====================================================
@@ -416,4 +426,90 @@ model SubscriptionAuditEvent {
   @@index([actorUserId])
   @@index([eventType])
   @@index([createdAt])
+}
+
+enum StockMovementType {
+  OPENING
+  RESTOCK
+  SALE
+  SALE_REVERSAL
+  ADJUSTMENT
+  TRANSFER_IN
+  TRANSFER_OUT
+}
+
+enum ProductUnit {
+  PIECE
+  KG
+  GRAM
+  LITRE
+  ML
+  METRE
+  CM
+  PACK
+  BOX
+}
+
+model Product {
+  id           String      @id @default(uuid())
+  businessId   String
+  name         String
+  sku          String?
+  description  String?
+  costPrice    Decimal?    @db.Decimal(18, 2)
+  sellingPrice Decimal     @db.Decimal(18, 2)
+  isActive     Boolean     @default(true)
+  createdAt    DateTime    @default(now())
+  updatedAt    DateTime    @updatedAt
+  unit         ProductUnit @default(PIECE)
+
+  business Business @relation(fields: [businessId], references: [id], onDelete: Cascade)
+
+  branchStocks   BranchStock[]
+  stockMovements StockMovement[]
+  receiptItems   ReceiptItem[]
+
+  @@unique([businessId, sku])
+  @@index([businessId, name])
+}
+
+model BranchStock {
+  id              String   @id @default(uuid())
+  branchId        String
+  productId       String
+  quantity        Decimal  @default(0) @db.Decimal(18, 3)
+  referenceStock  Decimal  @default(0) @db.Decimal(18, 3)
+  lowStockPercent Int      @default(20)
+  updatedAt       DateTime @updatedAt
+
+  branch  Branch  @relation(fields: [branchId], references: [id], onDelete: Cascade)
+  product Product @relation(fields: [productId], references: [id], onDelete: Restrict)
+
+  @@unique([branchId, productId])
+  @@index([branchId])
+}
+
+model StockMovement {
+  id              String            @id @default(uuid())
+  businessId      String
+  branchId        String
+  productId       String
+  userId          String?
+  receiptItemId   String?
+  type            StockMovementType
+  quantityChange  Decimal           @db.Decimal(18, 3)
+  quantityAfter   Decimal           @db.Decimal(18, 3)
+  note            String?
+  transferGroupId String?
+  createdAt       DateTime          @default(now())
+
+  branch      Branch       @relation(fields: [branchId], references: [id], onDelete: Restrict)
+  product     Product      @relation(fields: [productId], references: [id], onDelete: Restrict)
+  user        User?        @relation(fields: [userId], references: [id], onDelete: SetNull)
+  receiptItem ReceiptItem? @relation(fields: [receiptItemId], references: [id], onDelete: SetNull)
+
+  @@index([businessId, branchId, createdAt])
+  @@index([productId, createdAt])
+  @@index([receiptItemId])
+  @@index([transferGroupId])
 }

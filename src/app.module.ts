@@ -18,6 +18,7 @@ import { TeamModule } from './team/team.module';
 import { SubscriptionsModule } from './subscriptions/subscriptions.module';
 import { ScheduleModule } from '@nestjs/schedule';
 import { ThrottlerModule } from '@nestjs/throttler';
+import { InventoryModule } from './inventory/inventory.module';
 
 @Module({
   imports: [
@@ -49,6 +50,7 @@ import { ThrottlerModule } from '@nestjs/throttler';
     BusinessContextModule,
     BranchesModule,
     TeamModule,
+    InventoryModule,
   ],
 })
 export class AppModule {}

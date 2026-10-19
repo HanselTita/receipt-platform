@@ -911,6 +911,10 @@ export class ReceiptsService {
     await this.subscriptionsService.assertCanIssueReceipt(membership.businessId);
     const calculatedItems = dto.items.map((item, index) => this.calculateItem(item, index));
 
+    if (calculatedItems.some((item) => item.productId)) {
+      throw new BadRequestException('Inventory-linked receipts are not enabled yet.');
+    }
+
     const subtotal = calculatedItems.reduce(
       (total, item) => total.plus(item.lineSubtotal),
       new Decimal(0),

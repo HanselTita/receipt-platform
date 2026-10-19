@@ -16,6 +16,7 @@ import { CorrectReceiptDto } from './dto/correct-receipt.dto';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
 
 type CalculatedItem = {
+  productId?: string;
   description: string;
   quantity: Decimal;
   unitPrice: Decimal;
@@ -41,9 +42,7 @@ export class ReceiptsService {
      *
      * The client is not trusted to calculate financial totals.
      */
-    const calculatedItems = dto.items.map((item, index) =>
-      this.calculateItem(item, index),
-    );
+    const calculatedItems = dto.items.map((item, index) => this.calculateItem(item, index));
 
     const subtotal = calculatedItems.reduce(
       (total, item) => total.plus(item.lineSubtotal),
@@ -104,9 +103,7 @@ export class ReceiptsService {
         });
 
         if (!branch) {
-          throw new NotFoundException(
-            'The selected branch was not found or is inactive.',
-          );
+          throw new NotFoundException('The selected branch was not found or is inactive.');
         }
 
         /*
@@ -140,9 +137,7 @@ export class ReceiptsService {
         });
 
         if (!membership) {
-          throw new ForbiddenException(
-            'You do not have an active membership in this business.',
-          );
+          throw new ForbiddenException('You do not have an active membership in this business.');
         }
 
         const isOwner = membership.role === 'OWNER';
@@ -203,10 +198,7 @@ export class ReceiptsService {
 
         const issuedSequence = updatedBranch.nextReceiptNumber - 1;
 
-        const receiptNumber = this.formatReceiptNumber(
-          updatedBranch.receiptPrefix,
-          issuedSequence,
-        );
+        const receiptNumber = this.formatReceiptNumber(updatedBranch.receiptPrefix, issuedSequence);
 
         /*
          * 5. Generate a unique public verification code.
@@ -336,16 +328,11 @@ export class ReceiptsService {
     const limit = query.limit;
     const skip = (page - 1) * limit;
 
-    const issuedAtFilter = this.buildIssuedAtFilter(
-      query.dateFrom,
-      query.dateTo,
-    );
+    const issuedAtFilter = this.buildIssuedAtFilter(query.dateFrom, query.dateTo);
 
-    const minAmount =
-      query.minAmount !== undefined ? new Decimal(query.minAmount) : undefined;
+    const minAmount = query.minAmount !== undefined ? new Decimal(query.minAmount) : undefined;
 
-    const maxAmount =
-      query.maxAmount !== undefined ? new Decimal(query.maxAmount) : undefined;
+    const maxAmount = query.maxAmount !== undefined ? new Decimal(query.maxAmount) : undefined;
 
     if (minAmount && minAmount.isNegative()) {
       throw new BadRequestException('Minimum amount cannot be negative.');
@@ -356,9 +343,7 @@ export class ReceiptsService {
     }
 
     if (minAmount && maxAmount && minAmount.greaterThan(maxAmount)) {
-      throw new BadRequestException(
-        'Minimum amount cannot be greater than maximum amount.',
-      );
+      throw new BadRequestException('Minimum amount cannot be greater than maximum amount.');
     }
 
     const search = query.search?.trim();
@@ -656,9 +641,7 @@ export class ReceiptsService {
     const description = item.description.trim();
 
     if (!description) {
-      throw new BadRequestException(
-        `Item ${index + 1} must have a description.`,
-      );
+      throw new BadRequestException(`Item ${index + 1} must have a description.`);
     }
 
     const quantity = new Decimal(item.quantity);
@@ -669,21 +652,17 @@ export class ReceiptsService {
     const lineSubtotal = quantity.times(unitPrice).toDecimalPlaces(4);
 
     if (discountAmount.greaterThan(lineSubtotal)) {
-      throw new BadRequestException(
-        `Item ${index + 1} discount cannot exceed its subtotal.`,
-      );
+      throw new BadRequestException(`Item ${index + 1} discount cannot exceed its subtotal.`);
     }
 
     const taxableAmount = lineSubtotal.minus(discountAmount);
 
-    const taxAmount = taxableAmount
-      .times(taxRate)
-      .dividedBy(100)
-      .toDecimalPlaces(4);
+    const taxAmount = taxableAmount.times(taxRate).dividedBy(100).toDecimalPlaces(4);
 
     const lineTotal = taxableAmount.plus(taxAmount).toDecimalPlaces(4);
 
     return {
+      productId: item.productId,
       description,
       quantity,
       unitPrice,
@@ -768,18 +747,14 @@ export class ReceiptsService {
     });
 
     if (!membership) {
-      throw new ForbiddenException(
-        'You do not have an active business membership.',
-      );
+      throw new ForbiddenException('You do not have an active business membership.');
     }
 
     return {
       businessId: membership.businessId,
       role: membership.role,
       isOwner: membership.role === 'OWNER',
-      assignedBranchIds: membership.branchAssignments.map(
-        (assignment) => assignment.branchId,
-      ),
+      assignedBranchIds: membership.branchAssignments.map((assignment) => assignment.branchId),
     };
   }
 
@@ -796,15 +771,11 @@ export class ReceiptsService {
     });
 
     if (!membership) {
-      throw new ForbiddenException(
-        'You do not have an active business membership.',
-      );
+      throw new ForbiddenException('You do not have an active business membership.');
     }
 
     if (membership.role !== 'OWNER') {
-      throw new ForbiddenException(
-        'Only the business owner can void receipts.',
-      );
+      throw new ForbiddenException('Only the business owner can void receipts.');
     }
 
     const normalizedReason = reason.trim();
@@ -833,9 +804,7 @@ export class ReceiptsService {
     }
 
     if (receipt.status === 'CORRECTED') {
-      throw new BadRequestException(
-        'A corrected receipt cannot be voided through this action.',
-      );
+      throw new BadRequestException('A corrected receipt cannot be voided through this action.');
     }
 
     const updatedReceipt = await this.prisma.receipt.update({
@@ -910,11 +879,7 @@ export class ReceiptsService {
     };
   }
 
-  async correctReceipt(
-    userId: string,
-    receiptId: string,
-    dto: CorrectReceiptDto,
-  ) {
+  async correctReceipt(userId: string, receiptId: string, dto: CorrectReceiptDto) {
     const membership = await this.prisma.businessMembership.findFirst({
       where: {
         userId,
@@ -927,15 +892,11 @@ export class ReceiptsService {
     });
 
     if (!membership) {
-      throw new ForbiddenException(
-        'You do not have an active business membership.',
-      );
+      throw new ForbiddenException('You do not have an active business membership.');
     }
 
     if (membership.role !== 'OWNER') {
-      throw new ForbiddenException(
-        'Only the business owner can correct receipts.',
-      );
+      throw new ForbiddenException('Only the business owner can correct receipts.');
     }
 
     const correctionReason = dto.reason.trim();
@@ -947,12 +908,8 @@ export class ReceiptsService {
      * A correction creates a new replacement receipt, so it also
      * consumes the monthly receipt allowance.
      */
-    await this.subscriptionsService.assertCanIssueReceipt(
-      membership.businessId,
-    );
-    const calculatedItems = dto.items.map((item, index) =>
-      this.calculateItem(item, index),
-    );
+    await this.subscriptionsService.assertCanIssueReceipt(membership.businessId);
+    const calculatedItems = dto.items.map((item, index) => this.calculateItem(item, index));
 
     const subtotal = calculatedItems.reduce(
       (total, item) => total.plus(item.lineSubtotal),
@@ -1007,21 +964,15 @@ export class ReceiptsService {
         }
 
         if (originalReceipt.status === 'VOIDED') {
-          throw new BadRequestException(
-            'A voided receipt cannot be corrected.',
-          );
+          throw new BadRequestException('A voided receipt cannot be corrected.');
         }
 
         if (originalReceipt.status === 'CORRECTED') {
-          throw new BadRequestException(
-            'This receipt has already been corrected.',
-          );
+          throw new BadRequestException('This receipt has already been corrected.');
         }
 
         if (!originalReceipt.branch.isActive) {
-          throw new BadRequestException(
-            'The original receipt branch is inactive.',
-          );
+          throw new BadRequestException('The original receipt branch is inactive.');
         }
 
         const customer = await this.customersService.findOrCreateCustomer(
@@ -1060,10 +1011,7 @@ export class ReceiptsService {
 
         const issuedSequence = updatedBranch.nextReceiptNumber - 1;
 
-        const receiptNumber = this.formatReceiptNumber(
-          updatedBranch.receiptPrefix,
-          issuedSequence,
-        );
+        const receiptNumber = this.formatReceiptNumber(updatedBranch.receiptPrefix, issuedSequence);
 
         const verificationCode = this.generateVerificationCode();
 

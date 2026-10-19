@@ -14,6 +14,7 @@ import { QueryReceiptsDto } from './dto/query-receipts.dto';
 import { CustomersService } from '../customers/customers.service';
 import { CorrectReceiptDto } from './dto/correct-receipt.dto';
 import { SubscriptionsService } from '../subscriptions/subscriptions.service';
+import { InventoryService } from '../inventory/inventory.service';
 
 type CalculatedItem = {
   productId?: string;
@@ -34,6 +35,7 @@ export class ReceiptsService {
     private readonly prisma: PrismaService,
     private readonly customersService: CustomersService,
     private readonly subscriptionsService: SubscriptionsService,
+    private readonly inventoryService: InventoryService,
   ) {}
   async create(userId: string, dto: CreateReceiptDto) {
     /*
@@ -241,6 +243,7 @@ export class ReceiptsService {
 
             items: {
               create: calculatedItems.map((item) => ({
+                productId: item.productId ?? null,
                 description: item.description,
                 quantity: item.quantity.toFixed(4),
                 unitPrice: item.unitPrice.toFixed(4),

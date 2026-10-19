@@ -5,9 +5,9 @@ import { ReceiptsController } from './receipts.controller';
 import { ReceiptsService } from './receipts.service';
 import { CustomersModule } from '../customers/customers.module';
 import { SubscriptionsModule } from '../subscriptions/subscriptions.module';
-
+import { InventoryModule } from '../inventory/inventory.module';
 @Module({
-  imports: [AuthModule, SubscriptionsModule, CustomersModule],
+  imports: [AuthModule, SubscriptionsModule, CustomersModule, InventoryModule],
   controllers: [ReceiptsController],
   providers: [ReceiptsService],
   exports: [ReceiptsService],

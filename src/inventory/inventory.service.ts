@@ -473,4 +473,33 @@ export class InventoryService {
         stockStatus: stock.isOutOfStock ? 'OUT_OF_STOCK' : 'LOW_STOCK',
       }));
   }
+
+  async getStockMovements(userId: string, branchId: string) {
+    // Reuse the existing business, subscription,
+    // and branch-assignment authorization checks.
+    await this.getBranchStock(userId, branchId);
+
+    const { business } = await this.getInventoryContext(userId);
+
+    return this.prisma.stockMovement.findMany({
+      where: {
+        businessId: business.id,
+        branchId,
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            unit: true,
+          },
+        },
+      },
+      orderBy: {
+        createdAt: 'desc',
+      },
+      take: 100,
+    });
+  }
 }

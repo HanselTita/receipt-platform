@@ -75,4 +75,10 @@ export class InventoryController {
   ) {
     return this.inventoryService.getLowStockProducts(user.sub, branchId);
   }
+
+  // View stock movement history for a branch
+  @Get('stock/branch/:branchId/movements')
+  getStockMovements(@CurrentUser() user: AccessTokenPayload, @Param('branchId') branchId: string) {
+    return this.inventoryService.getStockMovements(user.sub, branchId);
+  }
 }

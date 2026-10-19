@@ -380,4 +380,97 @@ export class InventoryService {
       return updatedStock;
     });
   }
+
+  async getBranchStock(userId: string, branchId: string) {
+    const { business, membership } = await this.getInventoryContext(userId);
+
+    const branch = await this.prisma.branch.findFirst({
+      where: {
+        id: branchId,
+        businessId: business.id,
+        isActive: true,
+      },
+    });
+
+    if (!branch) {
+      throw new NotFoundException('Branch not found or inactive.');
+    }
+
+    // Owners can view all branches.
+    // Other users must have an active branch assignment.
+    if (membership.role !== 'OWNER') {
+      const assignment = await this.prisma.branchAssignment.findFirst({
+        where: {
+          branchId,
+          membershipId: membership.id,
+          isActive: true,
+        },
+      });
+
+      if (!assignment) {
+        throw new ForbiddenException('You are not assigned to this branch.');
+      }
+    }
+
+    const stocks = await this.prisma.branchStock.findMany({
+      where: {
+        branchId,
+        product: {
+          businessId: business.id,
+        },
+      },
+      include: {
+        product: {
+          select: {
+            id: true,
+            name: true,
+            sku: true,
+            unit: true,
+            sellingPrice: true,
+            isActive: true,
+          },
+        },
+      },
+      orderBy: {
+        product: {
+          name: 'asc',
+        },
+      },
+    });
+
+    return stocks.map((stock) => {
+      const threshold = stock.referenceStock.mul(stock.lowStockPercent).div(100);
+
+      const isLowStock = stock.quantity.lte(threshold);
+
+      return {
+        id: stock.id,
+        branchId: stock.branchId,
+        product: stock.product,
+        quantity: stock.quantity.toString(),
+        referenceStock: stock.referenceStock.toString(),
+        lowStockPercent: stock.lowStockPercent,
+        lowStockThreshold: threshold.toString(),
+        isLowStock,
+        isOutOfStock: stock.quantity.isZero(),
+      };
+    });
+  }
+
+  async getLowStockProducts(userId: string, branchId: string) {
+    // Reuse the existing method so subscription,
+    // business and branch-assignment checks are enforced.
+    const stocks = await this.getBranchStock(userId, branchId);
+
+    return stocks
+      .filter((stock) => {
+        // Only alert for active products with a
+        // meaningful reference stock level.
+        return stock.product.isActive && Number(stock.referenceStock) > 0 && stock.isLowStock;
+      })
+      .map((stock) => ({
+        ...stock,
+        stockStatus: stock.isOutOfStock ? 'OUT_OF_STOCK' : 'LOW_STOCK',
+      }));
+  }
 }

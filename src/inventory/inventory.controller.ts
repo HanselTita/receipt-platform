@@ -60,4 +60,19 @@ export class InventoryController {
   restockProduct(@CurrentUser() user: AccessTokenPayload, @Body() dto: RestockProductDto) {
     return this.inventoryService.restockProduct(user.sub, dto);
   }
+
+  // Get inventory quantities for one branch
+  @Get('stock/branch/:branchId')
+  getBranchStock(@CurrentUser() user: AccessTokenPayload, @Param('branchId') branchId: string) {
+    return this.inventoryService.getBranchStock(user.sub, branchId);
+  }
+
+  // Get products requiring replenishment
+  @Get('stock/branch/:branchId/low-stock')
+  getLowStockProducts(
+    @CurrentUser() user: AccessTokenPayload,
+    @Param('branchId') branchId: string,
+  ) {
+    return this.inventoryService.getLowStockProducts(user.sub, branchId);
+  }
 }

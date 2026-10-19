@@ -70,6 +70,31 @@ export class InventoryService {
     return { business, membership };
   }
 
+  async assertInventorySubscription(businessId: string): Promise<void> {
+    const subscription = await this.prisma.subscription.findUnique({
+      where: {
+        businessId,
+      },
+      select: {
+        plan: true,
+        status: true,
+        endsAt: true,
+      },
+    });
+
+    const hasInventoryAccess =
+      subscription !== null &&
+      subscription.plan !== 'FREE' &&
+      subscription.status === 'ACTIVE' &&
+      (subscription.endsAt === null || subscription.endsAt > new Date());
+
+    if (!hasInventoryAccess) {
+      throw new ForbiddenException(
+        'An active paid subscription is required for inventory-linked receipts.',
+      );
+    }
+  }
+
   async createProduct(userId: string, dto: CreateProductDto) {
     const { business } = await this.getInventoryContext(userId, true);
 
@@ -595,5 +620,76 @@ export class InventoryService {
     });
 
     return updatedStock;
+  }
+
+  async reverseStockForReceiptItem(
+    tx: Prisma.TransactionClient,
+    params: {
+      businessId: string;
+      branchId: string;
+      receiptItemId: string;
+      userId: string;
+    },
+  ) {
+    const { businessId, branchId, receiptItemId, userId } = params;
+
+    const sale = await tx.stockMovement.findFirst({
+      where: {
+        businessId,
+        branchId,
+        receiptItemId,
+        type: 'SALE',
+      },
+    });
+
+    if (!sale) {
+      return null;
+    }
+
+    const existingReversal = await tx.stockMovement.findFirst({
+      where: {
+        receiptItemId,
+        type: 'SALE_REVERSAL',
+      },
+      select: {
+        id: true,
+      },
+    });
+
+    if (existingReversal) {
+      throw new ConflictException('Stock has already been restored for this receipt item.');
+    }
+
+    const quantityToRestore = new Decimal(sale.quantityChange.toString()).abs();
+
+    const stock = await tx.branchStock.update({
+      where: {
+        branchId_productId: {
+          branchId,
+          productId: sale.productId,
+        },
+      },
+      data: {
+        quantity: {
+          increment: quantityToRestore.toFixed(3),
+        },
+      },
+    });
+
+    await tx.stockMovement.create({
+      data: {
+        businessId,
+        branchId,
+        productId: sale.productId,
+        receiptItemId,
+        userId,
+        type: 'SALE_REVERSAL',
+        quantityChange: quantityToRestore.toFixed(3),
+        quantityAfter: stock.quantity,
+        note: 'Stock restored because the receipt was voided or corrected.',
+      },
+    });
+
+    return stock;
   }
 }

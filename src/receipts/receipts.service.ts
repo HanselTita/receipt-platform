@@ -155,10 +155,12 @@ export class ReceiptsService {
             'You do not have permission to create receipts for this branch.',
           );
         }
+
+        if (calculatedItems.some((item) => item.productId)) {
+          await this.inventoryService.assertInventorySubscription(business.id);
+        }
+
         /*
-         * 4. Enforce the business subscription's monthly
-         * receipt allowance.
-         *
          * This runs only after we have verified that the authenticated
          * user actually belongs to the requested business.
          */
@@ -664,6 +666,13 @@ export class ReceiptsService {
     }
 
     const quantity = new Decimal(item.quantity);
+
+    if (item.productId && quantity.decimalPlaces() > 3) {
+      throw new BadRequestException(
+        `Item ${index + 1}: Inventory quantities cannot exceed 3 decimal places.`,
+      );
+    }
+
     const unitPrice = new Decimal(item.unitPrice);
     const discountAmount = new Decimal(item.discountAmount ?? 0);
     const taxRate = new Decimal(item.taxRate ?? 0);
@@ -811,6 +820,7 @@ export class ReceiptsService {
       select: {
         id: true,
         status: true,
+        branchId: true,
       },
     });
 
@@ -826,71 +836,114 @@ export class ReceiptsService {
       throw new BadRequestException('A corrected receipt cannot be voided through this action.');
     }
 
-    const updatedReceipt = await this.prisma.receipt.update({
-      where: {
-        id: receipt.id,
+    const updatedReceipt = await this.prisma.$transaction(
+      async (transaction) => {
+        // Claim the receipt for voiding only if it is still eligible.
+        const statusUpdate = await transaction.receipt.updateMany({
+          where: {
+            id: receipt.id,
+            businessId: membership.businessId,
+            status: {
+              notIn: ['VOIDED', 'CORRECTED'],
+            },
+          },
+          data: {
+            status: 'VOIDED',
+            voidedAt: new Date(),
+            voidReason: normalizedReason,
+            voidedByUserId: userId,
+          },
+        });
+
+        if (statusUpdate.count !== 1) {
+          throw new BadRequestException('This receipt has already been voided or corrected.');
+        }
+
+        // Restore stock for inventory-linked receipt items.
+        const receiptItems = await transaction.receiptItem.findMany({
+          where: {
+            receiptId: receipt.id,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        for (const item of receiptItems) {
+          await this.inventoryService.reverseStockForReceiptItem(transaction, {
+            businessId: membership.businessId,
+            branchId: receipt.branchId,
+            receiptItemId: item.id,
+            userId,
+          });
+        }
+
+        // Return the same receipt details as before.
+        return transaction.receipt.findUniqueOrThrow({
+          where: {
+            id: receipt.id,
+          },
+          include: {
+            customer: {
+              select: {
+                id: true,
+                fullName: true,
+                phone: true,
+                email: true,
+              },
+            },
+            items: {
+              orderBy: {
+                createdAt: 'asc',
+              },
+            },
+            business: {
+              select: {
+                id: true,
+                businessName: true,
+                businessType: true,
+                defaultCurrency: true,
+                logo: true,
+                email: true,
+                phone: true,
+                receiptFooter: true,
+              },
+            },
+            branch: {
+              select: {
+                id: true,
+                branchName: true,
+                address: true,
+                city: true,
+                stateOrProvince: true,
+                country: true,
+                phone: true,
+                receiptPrefix: true,
+                isMainBranch: true,
+              },
+            },
+            createdByUser: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+            voidedByUser: {
+              select: {
+                id: true,
+                firstName: true,
+                lastName: true,
+              },
+            },
+          },
+        });
       },
-      data: {
-        status: 'VOIDED',
-        voidedAt: new Date(),
-        voidReason: normalizedReason,
-        voidedByUserId: userId,
+      {
+        maxWait: 10000,
+        timeout: 20000,
       },
-      include: {
-        customer: {
-          select: {
-            id: true,
-            fullName: true,
-            phone: true,
-            email: true,
-          },
-        },
-        items: {
-          orderBy: {
-            createdAt: 'asc',
-          },
-        },
-        business: {
-          select: {
-            id: true,
-            businessName: true,
-            businessType: true,
-            defaultCurrency: true,
-            logo: true,
-            email: true,
-            phone: true,
-            receiptFooter: true,
-          },
-        },
-        branch: {
-          select: {
-            id: true,
-            branchName: true,
-            address: true,
-            city: true,
-            stateOrProvince: true,
-            country: true,
-            phone: true,
-            receiptPrefix: true,
-            isMainBranch: true,
-          },
-        },
-        createdByUser: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-        voidedByUser: {
-          select: {
-            id: true,
-            firstName: true,
-            lastName: true,
-          },
-        },
-      },
-    });
+    );
 
     return {
       message: 'Receipt voided successfully.',
@@ -929,6 +982,10 @@ export class ReceiptsService {
      */
     await this.subscriptionsService.assertCanIssueReceipt(membership.businessId);
     const calculatedItems = dto.items.map((item, index) => this.calculateItem(item, index));
+
+    if (calculatedItems.some((item) => item.productId)) {
+      await this.inventoryService.assertInventorySubscription(membership.businessId);
+    }
 
     if (calculatedItems.some((item) => item.productId)) {
       throw new BadRequestException('Inventory-linked receipts are not enabled yet.');
@@ -996,6 +1053,44 @@ export class ReceiptsService {
 
         if (!originalReceipt.branch.isActive) {
           throw new BadRequestException('The original receipt branch is inactive.');
+        }
+
+        const correctionClaim = await transaction.receipt.updateMany({
+          where: {
+            id: originalReceipt.id,
+            businessId: membership.businessId,
+            status: {
+              notIn: ['VOIDED', 'CORRECTED'],
+            },
+          },
+          data: {
+            status: 'CORRECTED',
+            correctedAt: new Date(),
+            correctionReason,
+            correctedByUserId: userId,
+          },
+        });
+
+        if (correctionClaim.count !== 1) {
+          throw new BadRequestException('This receipt has already been voided or corrected.');
+        }
+
+        const originalReceiptItems = await transaction.receiptItem.findMany({
+          where: {
+            receiptId: originalReceipt.id,
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        for (const item of originalReceiptItems) {
+          await this.inventoryService.reverseStockForReceiptItem(transaction, {
+            businessId: membership.businessId,
+            branchId: originalReceipt.branchId,
+            receiptItemId: item.id,
+            userId,
+          });
         }
 
         const customer = await this.customersService.findOrCreateCustomer(
@@ -1072,8 +1167,10 @@ export class ReceiptsService {
             createdByUserId: userId,
 
             originalReceiptId: originalReceipt.id,
+
             items: {
               create: calculatedItems.map((item) => ({
+                productId: item.productId ?? null,
                 description: item.description,
                 quantity: item.quantity.toFixed(4),
                 unitPrice: item.unitPrice.toFixed(4),
@@ -1108,21 +1205,20 @@ export class ReceiptsService {
           },
         });
 
-        await transaction.receipt.update({
-          where: {
-            id: originalReceipt.id,
-          },
+        for (const item of replacementReceipt.items) {
+          if (!item.productId) {
+            continue;
+          }
 
-          data: {
-            status: 'CORRECTED',
-
-            correctedAt: new Date(),
-
-            correctionReason,
-
-            correctedByUserId: userId,
-          },
-        });
+          await this.inventoryService.deductStockForReceiptItem(transaction, {
+            businessId: membership.businessId,
+            branchId: originalReceipt.branchId,
+            productId: item.productId,
+            receiptItemId: item.id,
+            userId,
+            quantity: new Decimal(item.quantity.toString()),
+          });
+        }
 
         return {
           message: 'Receipt corrected successfully.',

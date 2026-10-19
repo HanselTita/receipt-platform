@@ -1,9 +1,4 @@
-import {
-  ConflictException,
-  ForbiddenException,
-  Injectable,
-  NotFoundException,
-} from '@nestjs/common';
+import { ConflictException, ForbiddenException, Injectable } from '@nestjs/common';
 
 import { PrismaService } from '../prisma/prisma.service';
 import { BusinessContextService } from '../business-context/business-context.service';
@@ -11,10 +6,13 @@ import { BusinessContextService } from '../business-context/business-context.ser
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 
-import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
 import { RestockProductDto } from './dto/restock-product.dto';
+
+import { BadRequestException, NotFoundException } from '@nestjs/common';
+
+import Decimal from 'decimal.js';
 
 @Injectable()
 export class InventoryService {
@@ -501,5 +499,101 @@ export class InventoryService {
       },
       take: 100,
     });
+  }
+
+  async deductStockForReceiptItem(
+    tx: Prisma.TransactionClient,
+    params: {
+      businessId: string;
+      branchId: string;
+      productId: string;
+      receiptItemId: string;
+      userId: string;
+      quantity: Decimal;
+    },
+  ) {
+    const { businessId, branchId, productId, receiptItemId, userId, quantity } = params;
+
+    if (!quantity.isFinite() || !quantity.isPositive() || quantity.decimalPlaces() > 3) {
+      throw new BadRequestException(
+        'Inventory quantity must be positive and have at most 3 decimal places.',
+      );
+    }
+
+    const product = await tx.product.findFirst({
+      where: {
+        id: productId,
+        businessId,
+        isActive: true,
+      },
+    });
+
+    if (!product) {
+      throw new NotFoundException('Inventory product was not found or is inactive.');
+    }
+
+    const wholeNumberUnits = ['PIECE', 'PACK', 'BOX'];
+
+    if (wholeNumberUnits.includes(product.unit) && !quantity.isInteger()) {
+      throw new BadRequestException(`${product.unit} products require whole-number quantities.`);
+    }
+
+    // Prevent duplicate stock deduction for the same receipt item.
+    const existingSale = await tx.stockMovement.findFirst({
+      where: {
+        receiptItemId,
+        type: 'SALE',
+      },
+      select: { id: true },
+    });
+
+    if (existingSale) {
+      throw new ConflictException('Stock has already been deducted for this receipt item.');
+    }
+
+    // Conditional atomic update prevents stock from becoming negative.
+    const result = await tx.branchStock.updateMany({
+      where: {
+        branchId,
+        productId,
+        quantity: {
+          gte: quantity.toFixed(3),
+        },
+      },
+      data: {
+        quantity: {
+          decrement: quantity.toFixed(3),
+        },
+      },
+    });
+
+    if (result.count !== 1) {
+      throw new ConflictException('Insufficient stock or stock record not found for this branch.');
+    }
+
+    const updatedStock = await tx.branchStock.findUniqueOrThrow({
+      where: {
+        branchId_productId: {
+          branchId,
+          productId,
+        },
+      },
+    });
+
+    await tx.stockMovement.create({
+      data: {
+        businessId,
+        branchId,
+        productId,
+        receiptItemId,
+        userId,
+        type: 'SALE',
+        quantityChange: quantity.negated().toFixed(3),
+        quantityAfter: updatedStock.quantity,
+        note: 'Stock deducted when receipt was issued.',
+      },
+    });
+
+    return updatedStock;
   }
 }

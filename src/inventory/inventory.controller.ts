@@ -8,6 +8,7 @@ import { InventoryService } from './inventory.service';
 import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
+import { RestockProductDto } from './dto/restock-product.dto';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard)
@@ -52,5 +53,11 @@ export class InventoryController {
   @Post('stock/opening')
   setOpeningStock(@CurrentUser() user: AccessTokenPayload, @Body() dto: SetOpeningStockDto) {
     return this.inventoryService.setOpeningStock(user.sub, dto);
+  }
+
+  // Add stock to an existing branch inventory record
+  @Post('stock/restock')
+  restockProduct(@CurrentUser() user: AccessTokenPayload, @Body() dto: RestockProductDto) {
+    return this.inventoryService.restockProduct(user.sub, dto);
   }
 }

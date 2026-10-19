@@ -14,6 +14,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { BadRequestException } from '@nestjs/common';
 import { Prisma } from '../../generated/prisma/client';
 import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
+import { RestockProductDto } from './dto/restock-product.dto';
 
 @Injectable()
 export class InventoryService {
@@ -295,6 +296,88 @@ export class InventoryService {
       });
 
       return stock;
+    });
+  }
+
+  async restockProduct(userId: string, dto: RestockProductDto) {
+    const { business } = await this.getInventoryContext(userId, true);
+
+    const quantity = new Prisma.Decimal(dto.quantity);
+
+    if (!quantity.isFinite() || quantity.lte(0)) {
+      throw new BadRequestException('Restock quantity must be greater than zero.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const branch = await tx.branch.findFirst({
+        where: {
+          id: dto.branchId,
+          businessId: business.id,
+          isActive: true,
+        },
+      });
+
+      if (!branch) {
+        throw new NotFoundException('Branch not found or inactive.');
+      }
+
+      const product = await tx.product.findFirst({
+        where: {
+          id: dto.productId,
+          businessId: business.id,
+          isActive: true,
+        },
+      });
+
+      if (!product) {
+        throw new NotFoundException('Product not found or inactive.');
+      }
+
+      if (['PIECE', 'PACK', 'BOX'].includes(product.unit) && !quantity.isInteger()) {
+        throw new BadRequestException(
+          `Products measured in ${product.unit} require whole-number quantities.`,
+        );
+      }
+
+      const stock = await tx.branchStock.findUnique({
+        where: {
+          branchId_productId: {
+            branchId: dto.branchId,
+            productId: dto.productId,
+          },
+        },
+      });
+
+      if (!stock) {
+        throw new NotFoundException('Opening stock must be recorded before restocking.');
+      }
+
+      // Atomically increase the database quantity.
+      const updatedStock = await tx.branchStock.update({
+        where: {
+          id: stock.id,
+        },
+        data: {
+          quantity: {
+            increment: quantity,
+          },
+        },
+      });
+
+      await tx.stockMovement.create({
+        data: {
+          businessId: business.id,
+          branchId: dto.branchId,
+          productId: dto.productId,
+          userId,
+          type: 'RESTOCK',
+          quantityChange: quantity,
+          quantityAfter: updatedStock.quantity,
+          note: dto.note?.trim() || 'Stock replenishment',
+        },
+      });
+
+      return updatedStock;
     });
   }
 }

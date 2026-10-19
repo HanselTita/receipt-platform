@@ -314,9 +314,21 @@ export class ReceiptsService {
           },
         });
 
-        /*
-         * 7. Returning this object completes the HTTP request.
-         */
+        for (const item of receipt.items) {
+          if (!item.productId) {
+            continue;
+          }
+
+          await this.inventoryService.deductStockForReceiptItem(transaction, {
+            businessId: business.id,
+            branchId: branch.id,
+            productId: item.productId,
+            receiptItemId: item.id,
+            userId,
+            quantity: new Decimal(item.quantity.toString()),
+          });
+        }
+
         return {
           message: 'Receipt created successfully.',
           receipt,

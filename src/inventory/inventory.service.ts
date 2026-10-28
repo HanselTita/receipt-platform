@@ -235,7 +235,7 @@ export class InventoryService {
   }
 
   async setOpeningStock(userId: string, dto: SetOpeningStockDto) {
-    const { business } = await this.getInventoryContext(userId, true);
+    const { business, membership } = await this.getInventoryContext(userId, true);
 
     const branch = await this.prisma.branch.findFirst({
       where: {
@@ -247,6 +247,28 @@ export class InventoryService {
 
     if (!branch) {
       throw new NotFoundException('Branch not found or inactive.');
+    }
+
+    if (membership.role !== 'OWNER') {
+      const assignment = await this.prisma.businessMembership.findFirst({
+        where: {
+          id: membership.id,
+
+          branchAssignments: {
+            some: {
+              branchId: dto.branchId,
+              isActive: true,
+            },
+          },
+        },
+        select: {
+          id: true,
+        },
+      });
+
+      if (!assignment) {
+        throw new ForbiddenException('You are not assigned to this branch.');
+      }
     }
 
     const product = await this.prisma.product.findFirst({
@@ -263,6 +285,17 @@ export class InventoryService {
 
     const quantity = new Prisma.Decimal(dto.quantity);
     const referenceStock = new Prisma.Decimal(dto.referenceStock);
+
+    if (
+      !quantity.isFinite() ||
+      !referenceStock.isFinite() ||
+      quantity.decimalPlaces() > 3 ||
+      referenceStock.decimalPlaces() > 3
+    ) {
+      throw new BadRequestException(
+        'Stock quantities must be finite numbers with no more than 3 decimal places.',
+      );
+    }
 
     if (quantity.isNegative() || referenceStock.isNegative()) {
       throw new BadRequestException('Stock quantities cannot be negative.');
@@ -323,12 +356,16 @@ export class InventoryService {
   }
 
   async restockProduct(userId: string, dto: RestockProductDto) {
-    const { business } = await this.getInventoryContext(userId, true);
+    const { business, membership } = await this.getInventoryContext(userId, true);
 
     const quantity = new Prisma.Decimal(dto.quantity);
 
     if (!quantity.isFinite() || quantity.lte(0)) {
       throw new BadRequestException('Restock quantity must be greater than zero.');
+    }
+
+    if (quantity.decimalPlaces() > 3) {
+      throw new BadRequestException('Restock quantity cannot exceed 3 decimal places.');
     }
 
     return this.prisma.$transaction(async (tx) => {
@@ -342,6 +379,28 @@ export class InventoryService {
 
       if (!branch) {
         throw new NotFoundException('Branch not found or inactive.');
+      }
+
+      if (membership.role !== 'OWNER') {
+        const assignment = await tx.businessMembership.findFirst({
+          where: {
+            id: membership.id,
+
+            branchAssignments: {
+              some: {
+                branchId: dto.branchId,
+                isActive: true,
+              },
+            },
+          },
+          select: {
+            id: true,
+          },
+        });
+
+        if (!assignment) {
+          throw new ForbiddenException('You are not assigned to this branch.');
+        }
       }
 
       const product = await tx.product.findFirst({

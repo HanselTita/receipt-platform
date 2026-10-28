@@ -46,7 +46,10 @@ export class ReceiptsService {
      */
     const calculatedItems = dto.items.map((item, index) => this.calculateItem(item, index));
 
-    if (calculatedItems.some((item) => item.productId)) {
+    if (
+      calculatedItems.some((item) => item.productId) &&
+      (process.env.NODE_ENV === 'production' || process.env.ENABLE_INVENTORY_RECEIPTS !== 'true')
+    ) {
       throw new BadRequestException('Inventory-linked receipts are not enabled yet.');
     }
 
@@ -987,7 +990,10 @@ export class ReceiptsService {
       await this.inventoryService.assertInventorySubscription(membership.businessId);
     }
 
-    if (calculatedItems.some((item) => item.productId)) {
+    if (
+      calculatedItems.some((item) => item.productId) &&
+      (process.env.NODE_ENV === 'production' || process.env.ENABLE_INVENTORY_RECEIPTS !== 'true')
+    ) {
       throw new BadRequestException('Inventory-linked receipts are not enabled yet.');
     }
 

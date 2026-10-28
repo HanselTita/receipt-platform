@@ -9,6 +9,7 @@ import { UpdateProductDto } from './dto/update-product.dto';
 import { Prisma } from '../../generated/prisma/client';
 import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
 import { RestockProductDto } from './dto/restock-product.dto';
+import { AdjustStockDto } from './dto/adjust-stock.dto';
 
 import { BadRequestException, NotFoundException } from '@nestjs/common';
 
@@ -456,6 +457,134 @@ export class InventoryService {
           quantityChange: quantity,
           quantityAfter: updatedStock.quantity,
           note: dto.note?.trim() || 'Stock replenishment',
+        },
+      });
+
+      return updatedStock;
+    });
+  }
+
+  async adjustStock(userId: string, dto: AdjustStockDto) {
+    const { business, membership } = await this.getInventoryContext(userId, true);
+
+    const quantityChange = new Prisma.Decimal(dto.quantityChange);
+    const reason = dto.reason?.trim();
+
+    if (
+      !quantityChange.isFinite() ||
+      quantityChange.isZero() ||
+      quantityChange.decimalPlaces() > 3
+    ) {
+      throw new BadRequestException(
+        'Adjustment must be a non-zero number with up to 3 decimal places.',
+      );
+    }
+
+    if (!reason) {
+      throw new BadRequestException('An adjustment reason is required.');
+    }
+
+    return this.prisma.$transaction(async (tx) => {
+      const branch = await tx.branch.findFirst({
+        where: {
+          id: dto.branchId,
+          businessId: business.id,
+          isActive: true,
+        },
+      });
+
+      if (!branch) {
+        throw new NotFoundException('Branch not found or inactive.');
+      }
+
+      if (membership.role !== 'OWNER') {
+        const assignment = await tx.businessMembership.findFirst({
+          where: {
+            id: membership.id,
+            branchAssignments: {
+              some: {
+                branchId: dto.branchId,
+                isActive: true,
+              },
+            },
+          },
+          select: { id: true },
+        });
+
+        if (!assignment) {
+          throw new ForbiddenException('You are not assigned to this branch.');
+        }
+      }
+
+      const product = await tx.product.findFirst({
+        where: {
+          id: dto.productId,
+          businessId: business.id,
+          isActive: true,
+        },
+      });
+
+      if (!product) {
+        throw new NotFoundException('Product not found or inactive.');
+      }
+
+      if (['PIECE', 'PACK', 'BOX'].includes(product.unit) && !quantityChange.isInteger()) {
+        throw new BadRequestException(
+          `Products measured in ${product.unit} require whole-number adjustments.`,
+        );
+      }
+
+      const stock = await tx.branchStock.findUnique({
+        where: {
+          branchId_productId: {
+            branchId: dto.branchId,
+            productId: dto.productId,
+          },
+        },
+      });
+
+      if (!stock) {
+        throw new NotFoundException('Opening stock must be recorded before adjustments.');
+      }
+
+      // Conditional update prevents concurrent deductions
+      // from producing negative inventory.
+      const result = await tx.branchStock.updateMany({
+        where: {
+          id: stock.id,
+          ...(quantityChange.isNegative()
+            ? {
+                quantity: {
+                  gte: quantityChange.abs(),
+                },
+              }
+            : {}),
+        },
+        data: {
+          quantity: {
+            increment: quantityChange,
+          },
+        },
+      });
+
+      if (result.count !== 1) {
+        throw new BadRequestException('Insufficient stock for this adjustment.');
+      }
+
+      const updatedStock = await tx.branchStock.findUniqueOrThrow({
+        where: { id: stock.id },
+      });
+
+      await tx.stockMovement.create({
+        data: {
+          businessId: business.id,
+          branchId: dto.branchId,
+          productId: dto.productId,
+          userId,
+          type: 'ADJUSTMENT',
+          quantityChange,
+          quantityAfter: updatedStock.quantity,
+          note: reason,
         },
       });
 

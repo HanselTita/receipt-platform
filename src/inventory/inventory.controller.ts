@@ -9,6 +9,7 @@ import { CreateProductDto } from './dto/create-product.dto';
 import { UpdateProductDto } from './dto/update-product.dto';
 import { SetOpeningStockDto } from './dto/set-opening-stock.dto';
 import { RestockProductDto } from './dto/restock-product.dto';
+import { AdjustStockDto } from './dto/adjust-stock.dto';
 
 @Controller('inventory')
 @UseGuards(JwtAuthGuard)
@@ -59,6 +60,12 @@ export class InventoryController {
   @Post('stock/restock')
   restockProduct(@CurrentUser() user: AccessTokenPayload, @Body() dto: RestockProductDto) {
     return this.inventoryService.restockProduct(user.sub, dto);
+  }
+
+  // Adjust existing stock for damage, loss, or corrections
+  @Post('stock/adjust')
+  adjustStock(@CurrentUser() user: AccessTokenPayload, @Body() dto: AdjustStockDto) {
+    return this.inventoryService.adjustStock(user.sub, dto);
   }
 
   // Get inventory quantities for one branch

@@ -11,6 +11,7 @@ import { SubscriptionsService } from './subscriptions.service';
 
 import { SubscriptionReconciliationScheduler } from './subscription-reconciliation.scheduler';
 import { SubscriptionAuditService } from './subscription-audit.service';
+import { GooglePlayBillingService } from './google-play-billing/google-play-billing.service';
 
 @Module({
   imports: [PrismaModule, AuthModule, PaymentsModule],
@@ -22,6 +23,7 @@ import { SubscriptionAuditService } from './subscription-audit.service';
     SubscriptionReceiptService,
     SubscriptionReconciliationScheduler,
     SubscriptionAuditService,
+    GooglePlayBillingService,
   ],
 
   exports: [SubscriptionsService],

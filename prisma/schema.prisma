@@ -309,6 +309,7 @@ enum PaymentProvider {
   STRIPE
   DLOCAL
   FLUTTERWAVE
+  GOOGLE_PLAY
 }
 
 enum SubscriptionAuditEventType {
